@@ -129,31 +129,34 @@ def run_full_analysis(token: str):
         # 1️⃣ Video kalite
         video_quality = analyze_video_quality(video_path)
 
-        # 2️⃣ Frame extraction
+        # 2️⃣ Frame extraction (AZ ve GÜVENLİ)
         frame_out = os.path.join(FRAMES_DIR, token)
-        frames_result = extract_frames(video_path, frame_out)
+        frames_result = extract_frames(video_path, frame_out, max_frames=12)
 
         # 3️⃣ Coverage
         coverage = estimate_coverage(frames_result["frames"])
 
-        # 4️⃣ Damage
+        # 4️⃣ Damage (SADECE HEURISTIC — YOLO YOK)
         damage = run_damage_pipeline(
             frames_result["frames"],
             vehicle_type=session.get("vehicle_type", "car"),
+            yolo_model_path=None,
         )
 
-        # 5️⃣ Engine audio
-        engine_audio = analyze_engine_audio(
-            video_path,
-            vehicle_is_electric=session.get("vehicle_type") == "electric_car",
-        )
+        # 5️⃣ Engine audio KAPALI (Render uyumlu)
+        engine_audio = {
+            "ok": False,
+            "skipped": True,
+            "risk_level": "unknown",
+            "hints": ["Motor sesi analizi bu sürümde devre dışı."]
+        }
 
         # 6️⃣ Confidence
         confidence = compute_confidence(
             video_quality=video_quality,
             coverage=coverage,
             damage=damage,
-            engine_audio=engine_audio,
+            engine_audio=None,
         )
 
         # 7️⃣ AI commentary
@@ -163,11 +166,11 @@ def run_full_analysis(token: str):
             video_quality=video_quality,
             coverage=coverage,
             damage=damage,
-            engine_audio=engine_audio,
+            engine_audio=None,
             confidence=confidence,
         )
 
-        # 8️⃣ Suspicious frames
+        # 8️⃣ Şüpheli kareler (heuristic)
         suspicious_dir = os.path.join(frame_out, "suspicious")
         suspicious_images = extract_suspicious_frames(
             token=token,
@@ -180,18 +183,16 @@ def run_full_analysis(token: str):
             "video_quality": video_quality,
             "coverage": coverage,
             "damage": damage,
-            "engine_audio": engine_audio,
             "confidence": confidence,
             "ai_commentary": ai_commentary,
             "suspicious_images": suspicious_images,
         })
 
     except Exception as e:
-        # ❗ ANALİZ PATLARSA BİLE UI DONMAZ
         session["error"] = str(e)
 
     finally:
-        # 🔒 KESİNLİKLE TAKILMA YOK
+        # 🔥 ASIL KURTARICI
         session["status"] = "analysis_completed"
 
 # =========================
