@@ -1,56 +1,41 @@
-# backend/analysis/ai_llm.py
 from __future__ import annotations
 
+import json
 import os
-from typing import Dict, Any, Optional
+from typing import Optional
+from urllib.request import Request, urlopen
 
-import requests
 
-
-def call_llm_commentary(prompt: str, *, timeout_sec: int = 25) -> Optional[str]:
+def call_llm_commentary(prompt: str) -> Optional[str]:
     """
     Optional LLM call.
-    - Uses OPENAI_API_KEY if present.
-    - If not present or fails: returns None (caller uses fallback).
+    If env not set, returns None (fallback commentary will be used).
+    Uses stdlib urllib to avoid 'requests' dependency.
     """
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not api_key:
+    endpoint = os.getenv("LLM_ENDPOINT", "").strip()
+    api_key = os.getenv("LLM_API_KEY", "").strip()
+
+    if not endpoint:
         return None
 
-    # Minimal request: OpenAI Responses API (HTTP)
-    # Eğer endpoint/format değiştiyse: yine de None fallback’le çalışır.
-    url = "https://api.openai.com/v1/responses"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    payload: Dict[str, Any] = {
-        "model": os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
-        "input": prompt,
-        "temperature": 0.4,
-        "max_output_tokens": 420,
-    }
+    payload = {"prompt": prompt}
+    data = json.dumps(payload).encode("utf-8")
+
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
 
     try:
-        r = requests.post(url, headers=headers, json=payload, timeout=timeout_sec)
-        if r.status_code >= 300:
-            return None
-        data = r.json()
-        # Try to extract text in a robust way
-        if "output_text" in data and isinstance(data["output_text"], str):
-            return data["output_text"].strip() or None
-        # fallback parsing
-        out = data.get("output", [])
-        if isinstance(out, list) and out:
-            # search for text
-            texts = []
-            for item in out:
-                content = item.get("content", [])
-                for c in content:
-                    if c.get("type") == "output_text" and isinstance(c.get("text"), str):
-                        texts.append(c["text"])
-            txt = "\n".join(texts).strip()
-            return txt or None
-        return None
+        req = Request(endpoint, data=data, headers=headers, method="POST")
+        with urlopen(req, timeout=30) as resp:
+            raw = resp.read().decode("utf-8", errors="ignore")
+        # beklenen format: {"text": "..."} veya direkt string
+        try:
+            j = json.loads(raw)
+            if isinstance(j, dict) and "text" in j:
+                return str(j["text"])
+        except Exception:
+            pass
+        return raw.strip() if raw.strip() else None
     except Exception:
         return None

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -32,7 +32,7 @@ app = FastAPI(title="CARVIX – AI Araç Ön Analiz")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # prod'da domain'e daraltırsın
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -48,15 +48,12 @@ FRAMES_DIR = os.path.join(BASE_DIR, "analysis_frames")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(FRAMES_DIR, exist_ok=True)
 
-# 🔥 STATIC FILES (ŞÜPHELİ GÖRSELLER İÇİN ZORUNLU)
-app.mount(
-    "/analysis_frames",
-    StaticFiles(directory=FRAMES_DIR),
-    name="analysis_frames",
-)
+# ✅ Şüpheli görselleri webden göstermek için static mount
+# URL:  /media/<token>/suspicious/suspicious_1.jpg
+app.mount("/media", StaticFiles(directory=FRAMES_DIR), name="media")
 
 # =========================
-# IN-MEMORY SESSION
+# IN-MEMORY SESSION (MVP)
 # =========================
 SESSIONS: Dict[str, dict] = {}
 
@@ -87,11 +84,7 @@ def start_payment():
         "vehicle_type": None,
         "status": "paid",
         "video_path": None,
-
-        # 🔒 FRONTEND BOŞ KALMASIN
-        "confidence": None,
-        "ai_commentary": None,
-        "suspicious_images": [],
+        "error": None,
     }
 
     return {"paid": True, "token": token}
@@ -119,58 +112,58 @@ def update_session(token: str, payload: SessionUpdate):
     return {"ok": True}
 
 # =========================
-# 🔥 FULL ANALYSIS PIPELINE
+# 🔥 FULL ANALYSIS (SYNC)
 # =========================
 def run_full_analysis(token: str):
     session = SESSIONS[token]
     video_path = session["video_path"]
 
+    session["status"] = "processing"
+    session["error"] = None
+
     try:
-        # 1️⃣ Video kalite
+        # 1) Video kalite
         video_quality = analyze_video_quality(video_path)
 
-        # 2️⃣ Frame extraction (AZ ve GÜVENLİ)
+        # 2) Frame extraction
         frame_out = os.path.join(FRAMES_DIR, token)
-        frames_result = extract_frames(video_path, frame_out, max_frames=12)
+        frames_result = extract_frames(video_path, frame_out)
 
-        # 3️⃣ Coverage
+        # 3) Coverage
         coverage = estimate_coverage(frames_result["frames"])
 
-        # 4️⃣ Damage (SADECE HEURISTIC — YOLO YOK)
+        # 4) Damage
         damage = run_damage_pipeline(
             frames_result["frames"],
             vehicle_type=session.get("vehicle_type", "car"),
-            yolo_model_path=None,
         )
 
-        # 5️⃣ Engine audio KAPALI (Render uyumlu)
-        engine_audio = {
-            "ok": False,
-            "skipped": True,
-            "risk_level": "unknown",
-            "hints": ["Motor sesi analizi bu sürümde devre dışı."]
-        }
+        # 5) Engine audio
+        engine_audio = analyze_engine_audio(
+            video_path,
+            vehicle_is_electric=session.get("vehicle_type") == "electric_car",
+        )
 
-        # 6️⃣ Confidence
+        # 6) Confidence
         confidence = compute_confidence(
             video_quality=video_quality,
             coverage=coverage,
             damage=damage,
-            engine_audio=None,
+            engine_audio=engine_audio,
         )
 
-        # 7️⃣ AI commentary
+        # 7) AI commentary
         ai_commentary = generate_human_commentary(
             vehicle_type=session.get("vehicle_type", "car"),
             scenario=session.get("scenario", ""),
             video_quality=video_quality,
             coverage=coverage,
             damage=damage,
-            engine_audio=None,
+            engine_audio=engine_audio,
             confidence=confidence,
         )
 
-        # 8️⃣ Şüpheli kareler (heuristic)
+        # 8) Suspicious frames (URL path döner)
         suspicious_dir = os.path.join(frame_out, "suspicious")
         suspicious_images = extract_suspicious_frames(
             token=token,
@@ -183,6 +176,7 @@ def run_full_analysis(token: str):
             "video_quality": video_quality,
             "coverage": coverage,
             "damage": damage,
+            "engine_audio": engine_audio,
             "confidence": confidence,
             "ai_commentary": ai_commentary,
             "suspicious_images": suspicious_images,
@@ -192,23 +186,18 @@ def run_full_analysis(token: str):
         session["error"] = str(e)
 
     finally:
-        # 🔥 ASIL KURTARICI
+        # ✅ her koşulda tamamlandı (takılma yok)
         session["status"] = "analysis_completed"
 
 # =========================
-# VIDEO UPLOAD
+# VIDEO UPLOAD (SYNC)
 # =========================
 @app.post("/upload/{token}/video")
-async def upload_video(
-    token: str,
-    background_tasks: BackgroundTasks,
-    video: UploadFile = File(...)
-):
+async def upload_video(token: str, video: UploadFile = File(...)):
     if token not in SESSIONS:
         raise HTTPException(404, "Session not found")
 
     session = SESSIONS[token]
-    session["status"] = "processing"
 
     save_path = os.path.join(UPLOAD_DIR, f"{token}.webm")
     contents = await video.read()
@@ -221,6 +210,15 @@ async def upload_video(
 
     session["video_path"] = save_path
 
-    background_tasks.add_task(run_full_analysis, token)
+    # 🔥 SENKRON ANALİZ (en sağlam MVP)
+    run_full_analysis(token)
 
-    return {"ok": True, "status": "processing"}
+    # sonucu direkt döndür
+    return {
+        "ok": True,
+        "status": session.get("status"),
+        "error": session.get("error"),
+        "confidence": session.get("confidence"),
+        "ai_commentary": session.get("ai_commentary"),
+        "suspicious_images": session.get("suspicious_images"),
+    }

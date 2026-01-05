@@ -1,8 +1,8 @@
 fastapi
 uvicorn
 python-multipart
-python-dotenv
-opencv-python-headless
 numpy
-reportlab
+opencv-python-headless
+pydantic
+python-dotenv
 requests
