@@ -6,7 +6,11 @@ from typing import Dict, Any, List, Optional
 import cv2
 import numpy as np
 
-from .live_yolo import YoloDetector, DEFAULT_DAMAGE_LABELS
+try:
+    from .live_yolo import YoloDetector, DEFAULT_DAMAGE_LABELS
+except Exception:
+    YoloDetector = None
+    DEFAULT_DAMAGE_LABELS = []
 
 
 def _heuristic_damage_signals(image_bgr: np.ndarray) -> Dict[str, float]:
@@ -76,15 +80,17 @@ def run_damage_pipeline(
     # ----------------------------
     # TRY YOLO (IF AVAILABLE)
     # ----------------------------
-    detector = None
+    
     use_yolo = False
+    detector = None
 
-    if yolo_model_path:
+    if yolo_model_path and YoloDetector:
         try:
             detector = YoloDetector(yolo_model_path)
             use_yolo = True
         except Exception:
             use_yolo = False
+            detector = None
 
     findings: List[Dict[str, Any]] = []
     label_counter: Dict[str, int] = {}
