@@ -5,44 +5,37 @@ from typing import Dict, Any, List
 import cv2
 
 
-def extract_suspicious_frames(
+def extract_suspicious_frames_from_images(
     *,
     token: str,
     damage: Dict[str, Any],
     output_dir: str,
-    max_images: int = 5,
+    max_images: int = 4,
 ) -> List[Dict[str, Any]]:
     """
+    Selects suspicious images from damage pipeline output and saves thumbnails.
+
     Returns list:
     [
-      {
-        "image_path": "/media/<token>/suspicious/suspicious_1.jpg",
-        "caption": "...",
-        "severity": "low|medium|high"
-      }
+      {"image_path": "...jpg", "caption": "...", "severity": "low|medium|high"}
     ]
     """
     os.makedirs(output_dir, exist_ok=True)
-
     results: List[Dict[str, Any]] = []
+
     method = damage.get("method")
 
-    def to_url(filename: str) -> str:
-        return f"/media/{token}/suspicious/{filename}"
-
-    # =========================
-    # YOLO BASED
-    # =========================
+    # YOLO BASED: findings contain {"frame": <path>, "label", "confidence", "box"}
     if method == "yolo":
-        findings = damage.get("findings", [])
+        findings = (damage.get("findings") or [])
         findings = sorted(findings, key=lambda x: float(x.get("confidence", 0)), reverse=True)[:max_images]
 
         for i, f in enumerate(findings):
-            frame_path = f.get("frame")
-            if not frame_path or not os.path.exists(frame_path):
+            img_path = f.get("frame")
+            if not img_path or not os.path.exists(img_path):
                 continue
 
-            img = cv2.imread(frame_path)
+            img = cv2.imread(img_path)
             if img is None:
                 continue
 
@@ -51,34 +44,30 @@ def extract_suspicious_frames(
                 x1, y1, x2, y2 = map(int, box)
                 cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), 2)
 
-            filename = f"suspicious_{i+1}.jpg"
-            out_path = os.path.join(output_dir, filename)
+            out_path = os.path.join(output_dir, f"suspicious_{i+1}.jpg")
             cv2.imwrite(out_path, img)
 
             results.append({
-                "image_path": to_url(filename),
+                "image_path": out_path,
                 "caption": f"Olası {f.get('label', 'hasar')} sinyali",
                 "severity": "medium",
             })
 
         return results
 
-    # =========================
-    # HEURISTIC BASED
-    # =========================
-    frames = (damage.get("findings", []) or [])[:max_images]
+    # HEURISTIC BASED: findings contain {"frame": <path>, "signals": {...}}
+    frames = (damage.get("findings") or [])[:max_images]
 
     for i, f in enumerate(frames):
-        frame_path = f.get("frame")
-        if not frame_path or not os.path.exists(frame_path):
+        img_path = f.get("frame")
+        if not img_path or not os.path.exists(img_path):
             continue
 
-        img = cv2.imread(frame_path)
+        img = cv2.imread(img_path)
         if img is None:
             continue
 
-        filename = f"suspicious_{i+1}.jpg"
-        out_path = os.path.join(output_dir, filename)
+        out_path = os.path.join(output_dir, f"suspicious_{i+1}.jpg")
         cv2.imwrite(out_path, img)
 
         sig = f.get("signals", {}) or {}
@@ -89,7 +78,7 @@ def extract_suspicious_frames(
         )
 
         results.append({
-            "image_path": to_url(filename),
+            "image_path": out_path,
             "caption": caption,
             "severity": "medium",
         })
