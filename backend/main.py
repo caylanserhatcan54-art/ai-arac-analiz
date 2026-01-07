@@ -1,9 +1,16 @@
 # backend/main.py
+import sys
+from pathlib import Path
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
 import os
 import uuid
 import re
 import json
-from pathlib import Path
+
 from typing import List, Dict, Any
 from datetime import datetime, timedelta, timezone
 
@@ -12,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-# ✅ DOĞRU IMPORT (package)
+
 from backend.firebase import db
 
 # -------------------------------------------------------------------
