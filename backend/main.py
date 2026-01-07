@@ -467,6 +467,12 @@ def get_analysis(token: str):
     data = _load_result(token)
     if not data:
         raise HTTPException(404, "Not found")
+
+    # 🔥 WORKER SONUCU VAR MI?
+    worker_result = RESULTS.get(token)
+    if worker_result:
+        data["yolo"] = worker_result.get("result")
+
     return data
 
 # =========================================================
