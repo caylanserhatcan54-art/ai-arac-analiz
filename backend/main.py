@@ -1,5 +1,6 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 import os, json, uuid, shutil
 
 # =========================
@@ -31,6 +32,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 🔥 STATIC FILES (ÇOK KRİTİK)
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+
 # =========================
 # UPLOAD IMAGES
 # =========================
@@ -38,11 +42,11 @@ app.add_middleware(
 async def upload_images(token: str, images: list[UploadFile] = File(...)):
     urls = []
     for img in images:
-        name = f"{uuid.uuid4()}_{img.filename}"
-        path = os.path.join(UPLOAD_DIR, name)
+        filename = f"{uuid.uuid4()}_{img.filename}"
+        path = os.path.join(UPLOAD_DIR, filename)
         with open(path, "wb") as f:
             shutil.copyfileobj(img.file, f)
-        urls.append(f"/uploads/{name}")
+        urls.append(f"https://ai-arac-analiz-backend.onrender.com/uploads/{filename}")
     return {"images": urls}
 
 # =========================
@@ -54,7 +58,9 @@ def create_job(payload: dict):
         jobs = json.load(f)
 
     job_id = payload["job_id"]
+
     jobs[job_id] = {
+        "job_id": job_id,
         "status": "pending",
         "images": payload["images"]
     }
@@ -62,7 +68,7 @@ def create_job(payload: dict):
     with open(JOBS_FILE, "w") as f:
         json.dump(jobs, f, indent=2)
 
-    return {"ok": True}
+    return {"ok": True, "job_id": job_id}
 
 # =========================
 # WORKER POLL
@@ -72,12 +78,12 @@ def next_job():
     with open(JOBS_FILE, "r") as f:
         jobs = json.load(f)
 
-    for jid, job in jobs.items():
+    for job in jobs.values():
         if job["status"] == "pending":
-            jobs[jid]["status"] = "processing"
+            job["status"] = "processing"
             with open(JOBS_FILE, "w") as f:
                 json.dump(jobs, f, indent=2)
-            return {"job": {"job_id": jid, "images": job["images"]}}
+            return {"job": job}
 
     return {"job": None}
 
@@ -98,7 +104,7 @@ def save_result(job_id: str, payload: dict):
     return {"ok": True}
 
 # =========================
-# GET JOB (FRONTEND)
+# GET JOB
 # =========================
 @app.get("/jobs/{job_id}")
 def get_job(job_id: str):
