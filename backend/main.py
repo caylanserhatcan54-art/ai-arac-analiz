@@ -1,114 +1,196 @@
-from fastapi import FastAPI, UploadFile, File
+# backend/main.py
+import os
+import uuid
+import re
+import json
+import time
+from pathlib import Path
+from typing import List, Optional, Dict, Any
+
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-import os, json, uuid, shutil
 
-# =========================
-# PATHS
-# =========================
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
-JOBS_FILE = os.path.join(BASE_DIR, "jobs_queue.json")
+# -------------------------------------------------------------------
+# Paths
+# -------------------------------------------------------------------
+BASE_DIR = Path(__file__).resolve().parent
+UPLOAD_DIR = BASE_DIR / "uploads"
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+# -------------------------------------------------------------------
+# App
+# -------------------------------------------------------------------
+app = FastAPI(title="Carvix Backend", version="1.0.0")
 
-if not os.path.exists(JOBS_FILE):
-    with open(JOBS_FILE, "w") as f:
-        json.dump({}, f)
-
-# =========================
-# APP
-# =========================
-app = FastAPI()
+# -------------------------------------------------------------------
+# CORS
+# -------------------------------------------------------------------
+ALLOWED_ORIGINS = os.getenv(
+    "ALLOWED_ORIGINS",
+    "https://carvix-web.vercel.app,http://localhost:3000"
+).split(",")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://carvix-web.vercel.app",
-        "http://localhost:3000"
-    ],
+    allow_origins=[o.strip() for o in ALLOWED_ORIGINS if o.strip()],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# 🔥 STATIC FILES (ÇOK KRİTİK)
-app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+# -------------------------------------------------------------------
+# Static uploads
+# -------------------------------------------------------------------
+app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
-# =========================
-# UPLOAD IMAGES
-# =========================
-@app.post("/analysis/{token}/images")
-async def upload_images(token: str, images: list[UploadFile] = File(...)):
-    urls = []
-    for img in images:
-        filename = f"{uuid.uuid4()}_{img.filename}"
-        path = os.path.join(UPLOAD_DIR, filename)
-        with open(path, "wb") as f:
-            shutil.copyfileobj(img.file, f)
-        urls.append(f"https://ai-arac-analiz-backend.onrender.com/uploads/{filename}")
-    return {"images": urls}
+# -------------------------------------------------------------------
+# In-memory Job Store
+# PROD: Redis / Postgres / Supabase
+# -------------------------------------------------------------------
+JOBS: Dict[str, Dict[str, Any]] = {}
 
-# =========================
-# CREATE JOB
-# =========================
-@app.post("/jobs/create")
-def create_job(payload: dict):
-    with open(JOBS_FILE, "r") as f:
-        jobs = json.load(f)
+# -------------------------------------------------------------------
+# Helpers
+# -------------------------------------------------------------------
+def safe_filename(name: str) -> str:
+    name = name.strip()
+    name = re.sub(r"\s+", "_", name)
+    name = re.sub(r"[^a-zA-Z0-9._-]", "", name)
+    return name or "image.png"
 
-    job_id = payload["job_id"]
+def public_base_url() -> str:
+    return os.getenv(
+        "PUBLIC_BASE_URL",
+        "https://ai-arac-analiz-backend.onrender.com"
+    )
 
-    jobs[job_id] = {
-        "job_id": job_id,
-        "status": "pending",
-        "images": payload["images"]
+def parse_views(views_raw: str) -> List[Dict[str, str]]:
+    try:
+        data = json.loads(views_raw)
+        if not isinstance(data, list):
+            raise ValueError
+        for v in data:
+            if "filename" not in v or "part" not in v:
+                raise ValueError
+        return data
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail="views must be valid JSON: [{filename, part}, ...]"
+        )
+
+# -------------------------------------------------------------------
+# Health
+# -------------------------------------------------------------------
+@app.get("/health")
+def health():
+    return {"ok": True, "time": time.time()}
+
+# -------------------------------------------------------------------
+# Create Job (Upload)
+# -------------------------------------------------------------------
+@app.post("/jobs")
+async def create_job(
+    token: str = Form(...),
+    views: str = Form(...),   # JSON string
+    files: List[UploadFile] = File(...)
+):
+    job_id = str(uuid.uuid4())
+    views_meta = parse_views(views)
+
+    if len(files) != len(views_meta):
+        raise HTTPException(
+            status_code=400,
+            detail="files count must match views metadata count"
+        )
+
+    saved_images = []
+
+    for file, view in zip(files, views_meta):
+        original = file.filename or "image.png"
+        clean = safe_filename(original)
+        new_name = f"{uuid.uuid4()}_{clean}"
+        out_path = UPLOAD_DIR / new_name
+
+        content = await file.read()
+        out_path.write_bytes(content)
+
+        saved_images.append({
+            "filename": new_name,
+            "url": f"{public_base_url()}/uploads/{new_name}",
+            "part": view["part"],                 # 🔴 KRİTİK
+            "original_name": original,
+            "content_type": file.content_type,
+        })
+
+    JOBS[job_id] = {
+        "id": job_id,
+        "token": token,
+        "status": "queued",
+        "images": saved_images,
+        "result": None,
+        "error": None,
+        "created_at": time.time(),
     }
 
-    with open(JOBS_FILE, "w") as f:
-        json.dump(jobs, f, indent=2)
+    return {"id": job_id, "status": "queued"}
 
-    return {"ok": True, "job_id": job_id}
+# -------------------------------------------------------------------
+# Get Job
+# -------------------------------------------------------------------
+@app.get("/jobs/{job_id}")
+def get_job(job_id: str):
+    job = JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
 
-# =========================
-# WORKER POLL
-# =========================
+# -------------------------------------------------------------------
+# Worker: get next job
+# -------------------------------------------------------------------
 @app.get("/jobs/next")
-def next_job():
-    with open(JOBS_FILE, "r") as f:
-        jobs = json.load(f)
-
-    for job in jobs.values():
-        if job["status"] == "pending":
+def next_job(worker_key: Optional[str] = None):
+    for job_id, job in JOBS.items():
+        if job["status"] == "queued":
             job["status"] = "processing"
-            with open(JOBS_FILE, "w") as f:
-                json.dump(jobs, f, indent=2)
-            return {"job": job}
+            job["worker"] = worker_key or "unknown"
+            job["started_at"] = time.time()
+            return job
+    return {"id": None, "status": "empty"}
 
-    return {"job": None}
+# -------------------------------------------------------------------
+# Worker: complete job
+# -------------------------------------------------------------------
+@app.post("/jobs/{job_id}/complete")
+async def complete_job(job_id: str, payload: Dict[str, Any]):
+    job = JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
 
-# =========================
-# SAVE RESULT
-# =========================
-@app.post("/jobs/{job_id}/result")
-def save_result(job_id: str, payload: dict):
-    with open(JOBS_FILE, "r") as f:
-        jobs = json.load(f)
-
-    jobs[job_id]["status"] = "done"
-    jobs[job_id]["result"] = payload
-
-    with open(JOBS_FILE, "w") as f:
-        json.dump(jobs, f, indent=2)
+    # payload MUST include:
+    # - parts: {...}
+    # - coverage
+    # - overall_confidence
+    job["status"] = "done"
+    job["result"] = payload
+    job["completed_at"] = time.time()
+    job["error"] = None
 
     return {"ok": True}
 
-# =========================
-# GET JOB
-# =========================
-@app.get("/jobs/{job_id}")
-def get_job(job_id: str):
-    with open(JOBS_FILE, "r") as f:
-        jobs = json.load(f)
+# -------------------------------------------------------------------
+# Worker: fail job
+# -------------------------------------------------------------------
+@app.post("/jobs/{job_id}/fail")
+async def fail_job(job_id: str, payload: Dict[str, Any]):
+    job = JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
 
-    return jobs.get(job_id, {"status": "not_found"})
+    job["status"] = "failed"
+    job["error"] = payload
+    job["failed_at"] = time.time()
+
+    return {"ok": True}
