@@ -60,11 +60,12 @@ def _lazy_import_analysis():
 # PATHS
 # =========================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-JOBS_FILE = os.path.join(BASE_DIR, "jobs_queue.json")
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 IMAGES_DIR = os.path.join(UPLOAD_DIR, "images")
 AUDIO_DIR = os.path.join(UPLOAD_DIR, "audio")
 RESULTS_DIR = os.path.join(UPLOAD_DIR, "results")
+
+JOBS_FILE = os.path.join(BASE_DIR, "jobs_queue.json")
 
 os.makedirs(IMAGES_DIR, exist_ok=True)
 os.makedirs(AUDIO_DIR, exist_ok=True)
