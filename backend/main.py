@@ -17,11 +17,19 @@ from typing import List
 # =========================
 # ANALYSIS IMPORTS
 # =========================
-from analysis.damage_pipeline import run_damage_pipeline
-from analysis.engine_audio import analyze_engine_audio_file
-from analysis.ai_confidence import compute_confidence
-from analysis.ai_commentary import generate_human_commentary
-from analysis.suspicious_frames import extract_suspicious_frames_from_images
+def _lazy_import_analysis():
+    from analysis.damage_pipeline import run_damage_pipeline
+    from analysis.engine_audio import analyze_engine_audio_file
+    from analysis.ai_confidence import compute_confidence
+    from analysis.ai_commentary import generate_human_commentary
+    from analysis.suspicious_frames import extract_suspicious_frames_from_images
+    return (
+        run_damage_pipeline,
+        analyze_engine_audio_file,
+        compute_confidence,
+        generate_human_commentary,
+        extract_suspicious_frames_from_images,
+    )
 
 load_dotenv()
 
@@ -424,3 +432,57 @@ def get_analysis(token: str):
     if not data:
         raise HTTPException(404, "Not found")
     return data
+
+# =========================
+# JOB QUEUE (Render side)
+# =========================
+JOBS: List[Dict[str, Any]] = []
+RESULTS: Dict[str, Any] = {}
+
+
+@app.post("/jobs/create")
+def jobs_create(payload: Dict[str, Any]):
+    job_id = payload.get("job_id")
+    images = payload.get("images")  # image URLs list
+    meta = payload.get("meta") or {}
+
+    if not job_id or not isinstance(images, list) or len(images) == 0:
+        raise HTTPException(400, "job_id ve images(list) gerekli")
+
+    JOBS.append({
+        "job_id": job_id,
+        "images": images,
+        "meta": meta,
+        "created_at": datetime.utcnow().isoformat(),
+        "status": "queued",
+    })
+    return {"ok": True, "job_id": job_id}
+
+
+@app.get("/jobs/next")
+def jobs_next():
+    if not JOBS:
+        return {"job": None}
+
+    job = JOBS.pop(0)
+    job["status"] = "processing"
+    job["started_at"] = datetime.utcnow().isoformat()
+    return {"job": job}
+
+
+@app.post("/jobs/{job_id}/result")
+def jobs_result(job_id: str, payload: Dict[str, Any]):
+    RESULTS[job_id] = {
+        "status": "done",
+        "job_id": job_id,
+        "result": payload,
+        "completed_at": datetime.utcnow().isoformat(),
+    }
+    return {"ok": True}
+
+
+@app.get("/jobs/{job_id}")
+def jobs_get(job_id: str):
+    if job_id not in RESULTS:
+        return {"status": "processing", "job_id": job_id}
+    return RESULTS[job_id]
