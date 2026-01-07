@@ -11,12 +11,29 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dotenv import load_dotenv
-from fastapi import UploadFile, File, HTTPException
-from typing import List
 
-# =========================
-# ANALYSIS IMPORTS
-# =========================
+load_dotenv()
+
+app = FastAPI(title="CARVIX – Photo + Audio Vehicle Pre-Analysis")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # prod'da domain ile sınırla
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# =========================================================
+# JOB QUEUE (Render side)
+# =========================================================
+JOBS: List[Dict[str, Any]] = []
+RESULTS: Dict[str, Dict[str, Any]] = {}
+
+# =========================================================
+# ANALYSIS IMPORTS (LAZY)
+# Render'da ağır modüller yoksa bile app açılabilsin diye
+# =========================================================
 def _lazy_import_analysis():
     from analysis.damage_pipeline import run_damage_pipeline
     from analysis.engine_audio import analyze_engine_audio_file
@@ -31,21 +48,9 @@ def _lazy_import_analysis():
         extract_suspicious_frames_from_images,
     )
 
-load_dotenv()
-
-app = FastAPI(title="CARVIX – Photo + Audio Vehicle Pre-Analysis")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # prod'da domain ile sınırla
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# =========================
+# =========================================================
 # PATHS
-# =========================
+# =========================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 IMAGES_DIR = os.path.join(UPLOAD_DIR, "images")
@@ -59,14 +64,13 @@ os.makedirs(RESULTS_DIR, exist_ok=True)
 # Static serve: /media/...
 app.mount("/media", StaticFiles(directory=UPLOAD_DIR), name="media")
 
-# =========================
+# =========================================================
 # SIMPLE STORE (disk based)
-# =========================
+# =========================================================
 def _token_dir(token: str) -> str:
     return os.path.join(IMAGES_DIR, token)
 
 def _audio_path(token: str) -> str:
-    # Geriye dönük uyumluluk için default bin; ama artık orijinal uzantı ile kaydediyoruz
     return os.path.join(AUDIO_DIR, f"{token}.bin")
 
 def _audio_meta_path(token: str) -> str:
@@ -89,50 +93,41 @@ def _save_result(token: str, data: Dict[str, Any]) -> None:
 
 def _safe_ext_from_filename(name: str) -> str:
     name = (name or "").lower().strip()
-    # izinli uzantılar
     for ext in [".wav", ".mp3", ".m4a", ".aac", ".ogg", ".webm"]:
         if name.endswith(ext):
             return ext
     return ".bin"
 
 def _next_image_index(out_dir: str) -> int:
-    """
-    Aynı token'a tekrar upload edilince img_1.jpg overwrite olmasın diye
-    klasördeki mevcut img_*.ext dosyalarından index bulur.
-    """
     try:
         mx = 0
         for fn in os.listdir(out_dir):
             fn_low = fn.lower()
             if fn_low.startswith("img_"):
-                # img_12.jpg -> 12
-                parts = fn_low.split("_", 1)
-                if len(parts) != 2:
-                    continue
-                num_part = parts[1].split(".", 1)[0]
+                num_part = fn_low.split("_", 1)[1].split(".", 1)[0]
                 if num_part.isdigit():
                     mx = max(mx, int(num_part))
         return mx + 1
     except Exception:
         return 1
 
-# =========================
+# =========================================================
 # MODELS
-# =========================
+# =========================================================
 class StartPayload(BaseModel):
     vehicle_type: str = "car"
-    scenario: str = "buy_sell"  # artık tek yerde toplu
+    scenario: str = "buy_sell"
 
-# =========================
+# =========================================================
 # ROOT
-# =========================
+# =========================================================
 @app.get("/")
 def root():
     return {"status": "ok", "mode": "photo_audio"}
 
-# =========================
+# =========================================================
 # 1) START ANALYSIS (create token)
-# =========================
+# =========================================================
 @app.post("/analysis/start")
 def analysis_start(payload: StartPayload):
     token = str(uuid.uuid4())
@@ -151,9 +146,9 @@ def analysis_start(payload: StartPayload):
     _save_result(token, meta)
     return {"ok": True, "token": token}
 
-# =========================
+# =========================================================
 # 2) UPLOAD IMAGES (gallery images)
-# =========================
+# =========================================================
 @app.post("/analysis/{token}/images")
 async def upload_images(token: str, images: List[UploadFile] = File(...)):
     data = _load_result(token)
@@ -163,32 +158,29 @@ async def upload_images(token: str, images: List[UploadFile] = File(...)):
     out_dir = _token_dir(token)
     os.makedirs(out_dir, exist_ok=True)
 
-    # ✅ overwrite olmasın diye başlangıç index'i folder'dan hesapla
     start_idx = _next_image_index(out_dir)
 
     saved_disk_paths: List[str] = []
     max_images = 30
 
-    # mevcut toplamı da hesaba kat (30 limiti)
     existing = len(data.get("images") or [])
     remaining = max(0, max_images - existing)
     if remaining <= 0:
         raise HTTPException(400, "Maksimum 30 fotoğraf sınırına ulaşıldı.")
 
-    for i, img in enumerate(images[:remaining]):
+    for img in images[:remaining]:
         content = await img.read()
         if not content or len(content) < 2000:
             continue
 
-        # ext normalize (foto için)
-        name = (img.filename or f"img_{i+1}.jpg").lower()
+        name = (img.filename or "img.jpg").lower()
         ext = ".jpg"
         if name.endswith(".png"):
             ext = ".png"
-        elif name.endswith(".jpeg") or name.endswith(".jpg"):
-            ext = ".jpg"
         elif name.endswith(".webp"):
             ext = ".webp"
+        elif name.endswith(".jpeg") or name.endswith(".jpg"):
+            ext = ".jpg"
 
         fn = f"img_{start_idx + len(saved_disk_paths)}{ext}"
         path = os.path.join(out_dir, fn)
@@ -201,7 +193,6 @@ async def upload_images(token: str, images: List[UploadFile] = File(...)):
     if not saved_disk_paths:
         raise HTTPException(400, "No valid images uploaded")
 
-    # update meta (store as relative media url for frontend)
     rels = [f"/media/images/{token}/{os.path.basename(p)}" for p in saved_disk_paths]
     data["images"] = (data.get("images") or []) + rels
     data["status"] = "images_uploaded"
@@ -210,10 +201,9 @@ async def upload_images(token: str, images: List[UploadFile] = File(...)):
 
     return {"ok": True, "uploaded": len(saved_disk_paths), "images": rels}
 
-# =========================
+# =========================================================
 # 3) UPLOAD ENGINE AUDIO (optional)
-#    Accept any file; if ffmpeg missing and format not wav -> will skip gracefully
-# =========================
+# =========================================================
 @app.post("/analysis/{token}/audio")
 async def upload_audio(token: str, audio: UploadFile = File(...)):
     data = _load_result(token)
@@ -224,14 +214,12 @@ async def upload_audio(token: str, audio: UploadFile = File(...)):
     if not content or len(content) < 2000:
         raise HTTPException(400, "Audio too small")
 
-    # ✅ .bin yerine mümkünse orijinal uzantı
     ext = _safe_ext_from_filename(audio.filename or "")
     ap = os.path.join(AUDIO_DIR, f"{token}{ext}")
 
     with open(ap, "wb") as f:
         f.write(content)
 
-    # meta yaz (analizde doğru dosyayı bulmak için)
     meta = {
         "filename": audio.filename,
         "content_type": audio.content_type,
@@ -249,12 +237,6 @@ async def upload_audio(token: str, audio: UploadFile = File(...)):
     return {"ok": True, "audio": data["audio"]}
 
 def _find_audio_file(token: str) -> Optional[str]:
-    """
-    Token için kaydedilmiş ses dosyasını bulur:
-    - önce meta.json'dan
-    - yoksa bilinen uzantıları tarar
-    - en son legacy .bin
-    """
     mp = _audio_meta_path(token)
     if os.path.exists(mp):
         try:
@@ -271,15 +253,14 @@ def _find_audio_file(token: str) -> Optional[str]:
         if os.path.exists(p):
             return p
 
-    # legacy
     lp = _audio_path(token)
     if os.path.exists(lp):
         return lp
     return None
 
-# =========================
-# 4) RUN ANALYSIS (SYNC, NO BACKGROUND)
-# =========================
+# =========================================================
+# 4) RUN ANALYSIS (SYNC)
+# =========================================================
 @app.post("/analysis/{token}/run")
 def run_analysis(token: str):
     meta = _load_result(token)
@@ -290,13 +271,9 @@ def run_analysis(token: str):
     if len(images_rel) < 3:
         raise HTTPException(400, "En az 3 fotoğraf yükleyin (ön/arka/yan gibi).")
 
-    # convert /media/... to disk path
     image_paths: List[str] = []
     for rel in images_rel:
-        # rel: /media/images/{token}/file.jpg
-        if not isinstance(rel, str):
-            continue
-        if not rel.startswith("/media/"):
+        if not isinstance(rel, str) or not rel.startswith("/media/"):
             continue
         disk = os.path.join(UPLOAD_DIR, rel.replace("/media/", "").lstrip("/"))
         if os.path.exists(disk):
@@ -313,22 +290,23 @@ def run_analysis(token: str):
     _save_result(token, meta)
 
     try:
-        # -------------------------
-        # DAMAGE (photo-based)
-        # -------------------------
+        (
+            run_damage_pipeline,
+            analyze_engine_audio_file,
+            compute_confidence,
+            generate_human_commentary,
+            extract_suspicious_frames_from_images,
+        ) = _lazy_import_analysis()
+
         damage = run_damage_pipeline(
             image_paths,
             vehicle_type=vehicle_type,
-            # YOLO is optional via env
             yolo_model_path=os.getenv("YOLO_MODEL_PATH") or None,
             yolo_conf=float(os.getenv("YOLO_CONF") or 0.25),
             yolo_iou=float(os.getenv("YOLO_IOU") or 0.45),
             max_frames_to_process=28,
         )
 
-        # -------------------------
-        # SUSPICIOUS THUMBS (2x2)
-        # -------------------------
         suspicious_dir = os.path.join(_token_dir(token), "suspicious")
         suspicious_images = extract_suspicious_frames_from_images(
             token=token,
@@ -337,38 +315,25 @@ def run_analysis(token: str):
             max_images=4,
         )
 
-        # rewrite suspicious image paths to /media urls
         for item in suspicious_images:
             p = item.get("image_path")
             if p and isinstance(p, str) and os.path.exists(p):
-                # .../uploads/images/{token}/suspicious/x.jpg -> /media/images/{token}/suspicious/x.jpg
                 relp = p.replace(UPLOAD_DIR, "").replace("\\", "/")
                 if not relp.startswith("/"):
                     relp = "/" + relp
                 item["image_path"] = "/media" + relp
 
-        # -------------------------
-        # ENGINE AUDIO (optional)
-        # -------------------------
         engine_audio = None
         ap = _find_audio_file(token)
         if ap and os.path.exists(ap):
             engine_audio = analyze_engine_audio_file(
                 audio_path=ap,
                 vehicle_is_electric=(vehicle_type == "electric_car"),
-                max_duration_sec=12.0,  # 10 sn hedef, biraz tolerans
+                max_duration_sec=12.0,
             )
 
-        # -------------------------
-        # CONFIDENCE (no video_quality / coverage now)
-        # -------------------------
-        # We emulate minimal "video_quality" and "coverage" with photo counts.
-        # (keeps your compute_confidence structure intact)
-        video_quality = {"ok": True, "hints": []}  # placeholder
-        coverage = {
-            "coverage_ratio": min(1.0, len(image_paths) / 12.0),
-            "hints": [],
-        }
+        video_quality = {"ok": True, "hints": []}
+        coverage = {"coverage_ratio": min(1.0, len(image_paths) / 12.0), "hints": []}
         if len(image_paths) < 6:
             coverage["hints"].append("Fotoğraf sayısı az; daha fazla açı eklerseniz analiz güveni artar.")
 
@@ -379,9 +344,6 @@ def run_analysis(token: str):
             engine_audio=engine_audio,
         )
 
-        # -------------------------
-        # AI COMMENTARY
-        # -------------------------
         ai_commentary = generate_human_commentary(
             vehicle_type=vehicle_type,
             scenario=scenario,
@@ -412,7 +374,6 @@ def run_analysis(token: str):
         return {"ok": True, "result": result}
 
     except Exception as e:
-        # ✅ Asla processing'de takılma: hata da olsa completed yap ve error yaz
         err = str(e)
         failed = dict(meta)
         failed.update({
@@ -423,9 +384,9 @@ def run_analysis(token: str):
         _save_result(token, failed)
         return {"ok": False, "error": err}
 
-# =========================
+# =========================================================
 # 5) GET RESULT
-# =========================
+# =========================================================
 @app.get("/analysis/{token}")
 def get_analysis(token: str):
     data = _load_result(token)
@@ -433,17 +394,13 @@ def get_analysis(token: str):
         raise HTTPException(404, "Not found")
     return data
 
-# =========================
-# JOB QUEUE (Render side)
-# =========================
-JOBS: List[Dict[str, Any]] = []
-RESULTS: Dict[str, Any] = {}
-
-
+# =========================================================
+# JOB QUEUE ENDPOINTS
+# =========================================================
 @app.post("/jobs/create")
 def jobs_create(payload: Dict[str, Any]):
     job_id = payload.get("job_id")
-    images = payload.get("images")  # image URLs list
+    images = payload.get("images")
     meta = payload.get("meta") or {}
 
     if not job_id or not isinstance(images, list) or len(images) == 0:
@@ -458,7 +415,6 @@ def jobs_create(payload: Dict[str, Any]):
     })
     return {"ok": True, "job_id": job_id}
 
-
 @app.get("/jobs/next")
 def jobs_next():
     if not JOBS:
@@ -469,7 +425,6 @@ def jobs_next():
     job["started_at"] = datetime.utcnow().isoformat()
     return {"job": job}
 
-
 @app.post("/jobs/{job_id}/result")
 def jobs_result(job_id: str, payload: Dict[str, Any]):
     RESULTS[job_id] = {
@@ -479,7 +434,6 @@ def jobs_result(job_id: str, payload: Dict[str, Any]):
         "completed_at": datetime.utcnow().isoformat(),
     }
     return {"ok": True}
-
 
 @app.get("/jobs/{job_id}")
 def jobs_get(job_id: str):
