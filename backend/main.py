@@ -3,14 +3,17 @@ import os
 import uuid
 import re
 import json
-import time
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Dict, Any
+from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+
+# ✅ DOĞRU IMPORT (package)
+from backend.firebase import db
 
 # -------------------------------------------------------------------
 # Paths
@@ -46,16 +49,14 @@ app.add_middleware(
 app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
 # -------------------------------------------------------------------
-# In-memory Job Store
-# PROD: Redis / Postgres / Supabase
-# -------------------------------------------------------------------
-JOBS: Dict[str, Dict[str, Any]] = {}
-
-# -------------------------------------------------------------------
 # Helpers
 # -------------------------------------------------------------------
+def utcnow() -> datetime:
+    # Firestore için timezone-aware tarih iyi pratik
+    return datetime.now(timezone.utc)
+
 def safe_filename(name: str) -> str:
-    name = name.strip()
+    name = (name or "").strip()
     name = re.sub(r"\s+", "_", name)
     name = re.sub(r"[^a-zA-Z0-9._-]", "", name)
     return name or "image.png"
@@ -70,10 +71,12 @@ def parse_views(views_raw: str) -> List[Dict[str, str]]:
     try:
         data = json.loads(views_raw)
         if not isinstance(data, list):
-            raise ValueError
+            raise ValueError("views must be a list")
         for v in data:
+            if not isinstance(v, dict):
+                raise ValueError("views items must be objects")
             if "filename" not in v or "part" not in v:
-                raise ValueError
+                raise ValueError("views items must include filename and part")
         return data
     except Exception:
         raise HTTPException(
@@ -86,18 +89,18 @@ def parse_views(views_raw: str) -> List[Dict[str, str]]:
 # -------------------------------------------------------------------
 @app.get("/health")
 def health():
-    return {"ok": True, "time": time.time()}
+    return {"ok": True}
 
 # -------------------------------------------------------------------
-# Create Job (Upload)
+# Create Job (Upload) -> Firestore analyses + job_queue
 # -------------------------------------------------------------------
 @app.post("/jobs")
 async def create_job(
     token: str = Form(...),
-    views: str = Form(...),   # JSON string
+    views: str = Form(...),
     files: List[UploadFile] = File(...)
 ):
-    job_id = str(uuid.uuid4())
+    analysis_id = str(uuid.uuid4())
     views_meta = parse_views(views)
 
     if len(files) != len(views_meta):
@@ -120,63 +123,68 @@ async def create_job(
         saved_images.append({
             "filename": new_name,
             "url": f"{public_base_url()}/uploads/{new_name}",
-            "part": view["part"],                 # 🔴 KRİTİK
+            "part": view["part"],
             "original_name": original,
             "content_type": file.content_type,
         })
 
-    JOBS[job_id] = {
-        "id": job_id,
+    now = utcnow()
+
+    analysis_doc = {
+        "id": analysis_id,
         "token": token,
-        "status": "queued",
+        "status": "queued",             # queued | processing | done | failed
+        "created_at": now,
+        "expire_at": now + timedelta(hours=24),
         "images": saved_images,
         "result": None,
         "error": None,
-        "created_at": time.time(),
     }
 
-    return {"id": job_id, "status": "queued"}
+    # ✅ 1) analyses kaydı
+    db.collection("analyses").document(analysis_id).set(analysis_doc)
+
+    # ✅ 2) job_queue kaydı: worker buradan okuyacak (tek doküman yeterli)
+    # Worker tarafında sorgu: where(status=='queued').order_by(created_at).limit(1)
+    db.collection("job_queue").document(analysis_id).set({
+        "id": analysis_id,
+        "token": token,
+        "status": "queued",
+        "created_at": now,
+        "images": saved_images,
+    })
+
+    return {"id": analysis_id, "status": "queued"}
 
 # -------------------------------------------------------------------
-# Get Job
+# Get Job (Report Page)
 # -------------------------------------------------------------------
 @app.get("/jobs/{job_id}")
 def get_job(job_id: str):
-    job = JOBS.get(job_id)
-    if not job:
+    doc = db.collection("analyses").document(job_id).get()
+    if not doc.exists:
         raise HTTPException(status_code=404, detail="Job not found")
-    return job
-
-# -------------------------------------------------------------------
-# Worker: get next job
-# -------------------------------------------------------------------
-@app.get("/jobs/next")
-def next_job(worker_key: Optional[str] = None):
-    for job_id, job in JOBS.items():
-        if job["status"] == "queued":
-            job["status"] = "processing"
-            job["worker"] = worker_key or "unknown"
-            job["started_at"] = time.time()
-            return job
-    return {"id": None, "status": "empty"}
+    return doc.to_dict()
 
 # -------------------------------------------------------------------
 # Worker: complete job
 # -------------------------------------------------------------------
 @app.post("/jobs/{job_id}/complete")
 async def complete_job(job_id: str, payload: Dict[str, Any]):
-    job = JOBS.get(job_id)
-    if not job:
+    ref = db.collection("analyses").document(job_id)
+    snap = ref.get()
+    if not snap.exists:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    # payload MUST include:
-    # - parts: {...}
-    # - coverage
-    # - overall_confidence
-    job["status"] = "done"
-    job["result"] = payload
-    job["completed_at"] = time.time()
-    job["error"] = None
+    ref.update({
+        "status": "done",
+        "result": payload,
+        "completed_at": utcnow(),
+        "error": None,
+    })
+
+    # Kuyruktan düş
+    db.collection("job_queue").document(job_id).delete()
 
     return {"ok": True}
 
@@ -185,12 +193,28 @@ async def complete_job(job_id: str, payload: Dict[str, Any]):
 # -------------------------------------------------------------------
 @app.post("/jobs/{job_id}/fail")
 async def fail_job(job_id: str, payload: Dict[str, Any]):
-    job = JOBS.get(job_id)
-    if not job:
+    ref = db.collection("analyses").document(job_id)
+    snap = ref.get()
+    if not snap.exists:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    job["status"] = "failed"
-    job["error"] = payload
-    job["failed_at"] = time.time()
+    ref.update({
+        "status": "failed",
+        "error": payload,
+        "failed_at": utcnow(),
+    })
+
+    # Kuyruktan düş
+    db.collection("job_queue").document(job_id).delete()
 
     return {"ok": True}
+
+# -------------------------------------------------------------------
+# Optional: quick debug endpoint to see if queue has items
+# (Prod'da kaldırabilirsin)
+# -------------------------------------------------------------------
+@app.get("/debug/queue_count")
+def queue_count():
+    docs = db.collection("job_queue").where("status", "==", "queued").limit(50).stream()
+    c = sum(1 for _ in docs)
+    return {"queued": c}
