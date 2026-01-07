@@ -27,7 +27,6 @@ app.add_middleware(
 # =========================================================
 # JOB QUEUE (Render side)
 # =========================================================
-JOBS_FILE = os.path.join(BASE_DIR, "jobs_queue.json")
 
 def load_jobs():
     if not os.path.exists(JOBS_FILE):
@@ -61,6 +60,7 @@ def _lazy_import_analysis():
 # PATHS
 # =========================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+JOBS_FILE = os.path.join(BASE_DIR, "jobs_queue.json")
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 IMAGES_DIR = os.path.join(UPLOAD_DIR, "images")
 AUDIO_DIR = os.path.join(UPLOAD_DIR, "audio")
