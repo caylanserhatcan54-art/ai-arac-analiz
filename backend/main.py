@@ -482,13 +482,18 @@ def jobs_create(payload: Dict[str, Any]):
     if not job_id or not isinstance(images, list) or len(images) == 0:
         raise HTTPException(400, "job_id ve images(list) gerekli")
 
-    JOBS.append({
+    # 🔴 GEÇİCİ: direkt RESULT yazıyoruz
+    RESULTS[job_id] = {
+        "status": "done",
         "job_id": job_id,
-        "images": images,
-        "meta": meta,
-        "created_at": datetime.utcnow().isoformat(),
-        "status": "queued",
-    })
+        "result": {
+            "summary": f"{len(images)} fotoğraf alındı",
+            "detections": [],
+            "note": "Worker entegrasyonu sıradaki adım"
+        },
+        "completed_at": datetime.utcnow().isoformat(),
+    }
+
     return {"ok": True, "job_id": job_id}
 
 @app.get("/jobs/next")
