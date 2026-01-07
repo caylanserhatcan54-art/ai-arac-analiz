@@ -104,12 +104,42 @@ def _next_image_index(out_dir: str) -> int:
         for fn in os.listdir(out_dir):
             fn_low = fn.lower()
             if fn_low.startswith("img_"):
-                num_part = fn_low.split("_", 1)[1].split(".", 1)[0]
+                # img_12.jpg -> 12
+                part = fn_low.split("_", 1)[1]
+                num_part = part.split(".", 1)[0]
                 if num_part.isdigit():
                     mx = max(mx, int(num_part))
         return mx + 1
     except Exception:
         return 1
+
+def _public_base_url() -> str:
+    """
+    Worker'ın indirebilmesi için /media linklerini tam URL'e çeviriyoruz.
+    Render'da ENV set et:
+      PUBLIC_BASE_URL=https://ai-arac-analiz-backend.onrender.com
+    """
+    base = (os.getenv("PUBLIC_BASE_URL") or "").strip().rstrip("/")
+    return base
+
+def _ensure_safe_completed(meta: Dict[str, Any], error: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Frontend'in patlamaması için analysis_completed dönen her kayıtta
+    confidence + ai_commentary alanlarını garanti eder.
+    """
+    out = dict(meta)
+    out["status"] = "analysis_completed"
+    out["completed_at"] = datetime.utcnow().isoformat()
+    out["error"] = error
+
+    if "confidence" not in out or out["confidence"] is None:
+        out["confidence"] = {"confidence_score": 0, "confidence_level": "bilinmiyor"}
+    if "ai_commentary" not in out or out["ai_commentary"] is None:
+        out["ai_commentary"] = {"text": "Yapay zekâ yorumu hazırlanamadı."}
+    if "suspicious_images" not in out or out["suspicious_images"] is None:
+        out["suspicious_images"] = []
+
+    return out
 
 # =========================================================
 # MODELS
@@ -119,11 +149,15 @@ class StartPayload(BaseModel):
     scenario: str = "buy_sell"
 
 # =========================================================
-# ROOT
+# ROOT / HEALTH
 # =========================================================
 @app.get("/")
 def root():
     return {"status": "ok", "mode": "photo_audio"}
+
+@app.get("/health")
+def health():
+    return {"ok": True}
 
 # =========================================================
 # 1) START ANALYSIS (create token)
@@ -142,12 +176,13 @@ def analysis_start(payload: StartPayload):
         "images": [],
         "audio": None,
         "error": None,
+        "job_id": None,  # worker queue için
     }
     _save_result(token, meta)
     return {"ok": True, "token": token}
 
 # =========================================================
-# 2) UPLOAD IMAGES (gallery images)
+# 2) UPLOAD IMAGES
 # =========================================================
 @app.post("/analysis/{token}/images")
 async def upload_images(token: str, images: List[UploadFile] = File(...)):
@@ -259,7 +294,9 @@ def _find_audio_file(token: str) -> Optional[str]:
     return None
 
 # =========================================================
-# 4) RUN ANALYSIS (SYNC)
+# 4) RUN ANALYSIS
+# - USE_GPU_WORKER=1 => queue job (Vast worker çözer)
+# - else => local analysis (opsiyonel)
 # =========================================================
 @app.post("/analysis/{token}/run")
 def run_analysis(token: str):
@@ -269,8 +306,9 @@ def run_analysis(token: str):
 
     images_rel = meta.get("images") or []
     if len(images_rel) < 3:
-        raise HTTPException(400, "En az 3 fotoğraf yükleyin (ön/arka/yan gibi).")
+        raise HTTPException(400, f"En az 3 fotoğraf yükleyin. (şu an: {len(images_rel)})")
 
+    # /media/... -> disk path (local)
     image_paths: List[str] = []
     for rel in images_rel:
         if not isinstance(rel, str) or not rel.startswith("/media/"):
@@ -285,6 +323,47 @@ def run_analysis(token: str):
     vehicle_type = meta.get("vehicle_type") or "car"
     scenario = meta.get("scenario") or "buy_sell"
 
+    # --------------------------
+    # MODE A: GPU WORKER QUEUE
+    # --------------------------
+    if (os.getenv("USE_GPU_WORKER") or "").strip() == "1":
+        base = _public_base_url()
+        if not base:
+            # Bu yoksa worker linkleri indiremez
+            failed = _ensure_safe_completed(meta, error="PUBLIC_BASE_URL env eksik (worker indirme linki oluşturulamıyor)")
+            _save_result(token, failed)
+            return {"ok": False, "error": failed["error"]}
+
+        # worker indirebilsin diye full URL yap
+        image_urls = [base + rel for rel in images_rel]
+
+        job_id = token  # token ile aynı tutuyoruz
+        job = {
+            "job_id": job_id,
+            "images": image_urls,
+            "meta": {
+                "token": token,
+                "vehicle_type": vehicle_type,
+                "scenario": scenario,
+                # audio full url (varsa)
+                "audio": (base + meta["audio"]) if meta.get("audio") else None,
+            },
+            "created_at": datetime.utcnow().isoformat(),
+            "status": "queued",
+        }
+
+        JOBS.append(job)
+
+        meta["status"] = "queued"
+        meta["job_id"] = job_id
+        meta["error"] = None
+        _save_result(token, meta)
+
+        return {"ok": True, "queued": True, "job_id": job_id}
+
+    # --------------------------
+    # MODE B: LOCAL ANALYSIS
+    # --------------------------
     meta["status"] = "processing"
     meta["error"] = None
     _save_result(token, meta)
@@ -375,17 +454,13 @@ def run_analysis(token: str):
 
     except Exception as e:
         err = str(e)
-        failed = dict(meta)
-        failed.update({
-            "status": "analysis_completed",
-            "completed_at": datetime.utcnow().isoformat(),
-            "error": err,
-        })
+        failed = _ensure_safe_completed(meta, error=err)
         _save_result(token, failed)
         return {"ok": False, "error": err}
 
 # =========================================================
 # 5) GET RESULT
+# (worker sonucu geldiyse token json'da olacak)
 # =========================================================
 @app.get("/analysis/{token}")
 def get_analysis(token: str):
@@ -396,6 +471,7 @@ def get_analysis(token: str):
 
 # =========================================================
 # JOB QUEUE ENDPOINTS
+# Worker burada job çeker / sonucu bırakır
 # =========================================================
 @app.post("/jobs/create")
 def jobs_create(payload: Dict[str, Any]):
@@ -427,12 +503,46 @@ def jobs_next():
 
 @app.post("/jobs/{job_id}/result")
 def jobs_result(job_id: str, payload: Dict[str, Any]):
+    """
+    Worker sonucu buraya bırakır.
+    - RESULTS dict'e yaz
+    - Ayrıca /analysis/{token} endpoint'i çalışsın diye token dosyasını da güncelle
+    """
     RESULTS[job_id] = {
         "status": "done",
         "job_id": job_id,
         "result": payload,
         "completed_at": datetime.utcnow().isoformat(),
     }
+
+    # job_id == token varsayımı (biz token ile aynı kullanıyoruz)
+    token = job_id
+    meta = _load_result(token) or {"token": token, "created_at": datetime.utcnow().isoformat()}
+
+    # Worker payload'unu CARVIX report formatına normalize et
+    # (frontend crash olmasın diye field'leri garanti ediyoruz)
+    result = {
+        "token": token,
+        "vehicle_type": (meta.get("vehicle_type") or payload.get("vehicle_type") or "car"),
+        "scenario": (meta.get("scenario") or payload.get("scenario") or "buy_sell"),
+        "status": "analysis_completed",
+        "created_at": meta.get("created_at"),
+        "completed_at": datetime.utcnow().isoformat(),
+        "images": meta.get("images", []),
+        "suspicious_images": payload.get("suspicious_images") or [],
+        "damage": payload.get("damage"),
+        "engine_audio": payload.get("engine_audio"),
+        "confidence": payload.get("confidence") or {"confidence_score": 0, "confidence_level": "bilinmiyor"},
+        "ai_commentary": payload.get("ai_commentary") or {"text": "Yapay zekâ yorumu hazırlanamadı."},
+        "error": payload.get("error"),
+        "job_id": meta.get("job_id") or job_id,
+    }
+
+    # GARANTİ
+    result = _ensure_safe_completed(result, error=result.get("error"))
+
+    _save_result(token, result)
+
     return {"ok": True}
 
 @app.get("/jobs/{job_id}")
