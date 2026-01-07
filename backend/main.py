@@ -27,8 +27,17 @@ app.add_middleware(
 # =========================================================
 # JOB QUEUE (Render side)
 # =========================================================
-JOBS: List[Dict[str, Any]] = []
-RESULTS: Dict[str, Dict[str, Any]] = {}
+JOBS_FILE = os.path.join(BASE_DIR, "jobs_queue.json")
+
+def load_jobs():
+    if not os.path.exists(JOBS_FILE):
+        return []
+    with open(JOBS_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def save_jobs(jobs):
+    with open(JOBS_FILE, "w", encoding="utf-8") as f:
+        json.dump(jobs, f, ensure_ascii=False, indent=2)
 
 # =========================================================
 # ANALYSIS IMPORTS (LAZY)
@@ -488,28 +497,31 @@ def jobs_create(payload: Dict[str, Any]):
     if not job_id or not isinstance(images, list) or len(images) == 0:
         raise HTTPException(400, "job_id ve images(list) gerekli")
 
-    # 🔴 GEÇİCİ: direkt RESULT yazıyoruz
-    RESULTS[job_id] = {
-        "status": "done",
-        "job_id": job_id,
-        "result": {
-            "summary": f"{len(images)} fotoğraf alındı",
-            "detections": [],
-            "note": "Worker entegrasyonu sıradaki adım"
-        },
-        "completed_at": datetime.utcnow().isoformat(),
-    }
+    jobs = load_jobs()
 
+    jobs.append({
+        "job_id": job_id,
+        "images": images,
+        "meta": meta,
+        "created_at": datetime.utcnow().isoformat(),
+        "status": "queued",
+    })
+
+    save_jobs(jobs)
     return {"ok": True, "job_id": job_id}
 
 @app.get("/jobs/next")
 def jobs_next():
-    if not JOBS:
+    jobs = load_jobs()
+
+    if not jobs:
         return {"job": None}
 
-    job = JOBS.pop(0)
+    job = jobs.pop(0)
     job["status"] = "processing"
     job["started_at"] = datetime.utcnow().isoformat()
+
+    save_jobs(jobs)
     return {"job": job}
 
 @app.post("/jobs/{job_id}/result")
