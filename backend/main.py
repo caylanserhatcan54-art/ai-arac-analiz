@@ -10,6 +10,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -18,7 +19,10 @@ app = FastAPI(title="CARVIX – Photo + Audio Vehicle Pre-Analysis")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # prod'da domain ile sınırla
+    allow_origins=[
+        "https://carvix-web.vercel.app",
+        "http://localhost:3000"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -526,18 +530,24 @@ def jobs_next():
     return {"job": job}
 
 @app.post("/jobs/{job_id}/result")
-def jobs_result(job_id: str, payload: Dict[str, Any]):
-    """
-    Worker sonucu buraya bırakır.
-    - RESULTS dict'e yaz
-    - Ayrıca /analysis/{token} endpoint'i çalışsın diye token dosyasını da güncelle
-    """
-    RESULTS[job_id] = {
-        "status": "done",
-        "job_id": job_id,
-        "result": payload,
-        "completed_at": datetime.utcnow().isoformat(),
-    }
+def save_job_result(job_id: str, payload: dict):
+    if not os.path.exists(JOBS_FILE):
+        return {"error": "Jobs file not found"}
+
+    with open(JOBS_FILE, "r", encoding="utf-8") as f:
+        jobs = json.load(f)
+
+    if job_id not in jobs:
+        return {"error": "Job not found"}
+
+    jobs[job_id]["status"] = "done"
+    jobs[job_id]["result"] = payload
+
+    with open(JOBS_FILE, "w", encoding="utf-8") as f:
+        json.dump(jobs, f, indent=2, ensure_ascii=False)
+
+    return {"ok": True}
+
 
     # job_id == token varsayımı (biz token ile aynı kullanıyoruz)
     token = job_id
