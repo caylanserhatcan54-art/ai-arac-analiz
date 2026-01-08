@@ -11,8 +11,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+# =========================================================
+# ENV
+# =========================================================
 APP_ENV = os.getenv("APP_ENV", "prod")
-BASE_URL = os.getenv("BASE_URL", "https://ai-arac-analiz-backend.onrender.com").rstrip("/")
+BASE_URL = os.getenv(
+    "BASE_URL",
+    "https://ai-arac-analiz-backend.onrender.com"
+).rstrip("/")
+
 ALLOWED_ORIGINS = os.getenv(
     "ALLOWED_ORIGINS",
     "https://carvix-web.vercel.app,http://localhost:3000,http://127.0.0.1:3000"
@@ -27,6 +34,9 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 FLOWS_PATH = DATA_DIR / "flows.json"
 JOBS_PATH = DATA_DIR / "jobs.json"
 
+# =========================================================
+# HELPERS
+# =========================================================
 def _load_json(path: Path, default):
     if not path.exists():
         return default
@@ -36,10 +46,10 @@ def _load_json(path: Path, default):
         return default
 
 def _save_json(path: Path, data):
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-
-flows: Dict[str, Any] = _load_json(FLOWS_PATH, {})
-jobs: Dict[str, Any] = _load_json(JOBS_PATH, {})
+    path.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
 
 def now_ts() -> int:
     return int(time.time())
@@ -51,12 +61,19 @@ def safe_ext(filename: str) -> str:
     return ".bin"
 
 def make_public_upload_url(stored_name: str) -> str:
-    # StaticFiles => /uploads/{stored_name}
     return f"{BASE_URL}/uploads/{stored_name}"
 
+# =========================================================
+# STATE (FILE BASED)
+# =========================================================
+flows: Dict[str, Any] = _load_json(FLOWS_PATH, {})
+jobs: Dict[str, Any] = _load_json(JOBS_PATH, {})
+
+# =========================================================
+# APP
+# =========================================================
 app = FastAPI(title="Carvix Backend", version="1.0.0")
 
-# ✅ CORS (kritik)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[o.strip() for o in ALLOWED_ORIGINS if o.strip()],
@@ -65,33 +82,35 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ Uploads statik serve (kritik)
 app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
+# =========================================================
+# HEALTH
+# =========================================================
 @app.get("/health")
 def health():
     return {"ok": True, "env": APP_ENV}
 
-# -----------------------------
-# FLOW: web tarafı bu token ile upload yapar
-# -----------------------------
+# =========================================================
+# FLOW CREATE
+# =========================================================
 @app.post("/flows")
 def create_flow():
-    flow_token = str(uuid.uuid4())
-    flows[flow_token] = {
-        "token": flow_token,
+    token = str(uuid.uuid4())
+    flows[token] = {
+        "token": token,
         "created_at": now_ts(),
-        "parts": {},          # part_key -> list of image urls
-        "audio": None,        # audio url
+        "parts": {},
+        "audio": None,
         "status": "collecting",
         "report": None,
     }
     _save_json(FLOWS_PATH, flows)
-    return {"token": flow_token}
+    return {"token": token}
 
-# =============================
-# FLOW UPLOAD (PARÇA BAZLI)
-# =============================
+# =========================================================
+# FLOW IMAGE UPLOAD (PARÇA BAZLI)
+# =========================================================
 @app.post("/flows/{flow_token}/upload")
 async def upload_images(
     flow_token: str,
@@ -100,10 +119,10 @@ async def upload_images(
 ):
     flow = flows.get(flow_token)
     if not flow:
-        raise HTTPException(status_code=404, detail="Flow not found")
+        raise HTTPException(404, "Flow not found")
 
-    if part_key not in flow["parts"]:
-        flow["parts"][part_key] = []
+    flow.setdefault("parts", {})
+    flow["parts"].setdefault(part_key, [])
 
     for f in files:
         ext = safe_ext(f.filename or "file.bin")
@@ -120,6 +139,10 @@ async def upload_images(
         "part_key": part_key,
         "count": len(files),
     }
+
+# =========================================================
+# FLOW AUDIO UPLOAD
+# =========================================================
 @app.post("/flows/{flow_token}/upload-audio")
 async def upload_audio(
     flow_token: str,
@@ -127,26 +150,29 @@ async def upload_audio(
 ):
     flow = flows.get(flow_token)
     if not flow:
-        raise HTTPException(status_code=404, detail="Flow not found")
+        raise HTTPException(404, "Flow not found")
 
     ext = safe_ext(audio.filename or "audio.bin")
     stored = f"{uuid.uuid4()}{ext}"
     (UPLOAD_DIR / stored).write_bytes(await audio.read())
-    flow["audio"] = make_public_upload_url(stored)
 
+    flow["audio"] = make_public_upload_url(stored)
     flows[flow_token] = flow
     _save_json(FLOWS_PATH, flows)
-    return {"ok": True, "token": flow_token, "audio": flow["audio"]}
 
-# Flow'u analize gönder (job oluştur)
+    return {"ok": True, "audio": flow["audio"]}
+
+# =========================================================
+# FLOW SUBMIT → JOB CREATE
+# =========================================================
 @app.post("/flows/{flow_token}/submit")
 def submit_flow(flow_token: str):
     flow = flows.get(flow_token)
     if not flow:
-        raise HTTPException(status_code=404, detail="Flow not found")
+        raise HTTPException(404, "Flow not found")
 
-    if not flow["parts"]:
-        raise HTTPException(status_code=400, detail="No images uploaded")
+    if not flow.get("parts"):
+        raise HTTPException(400, "No images uploaded")
 
     job_id = str(uuid.uuid4())
     jobs[job_id] = {
@@ -158,72 +184,53 @@ def submit_flow(flow_token: str):
         "result": None,
         "error": None,
     }
+
     flow["status"] = "queued"
     flows[flow_token] = flow
 
     _save_json(JOBS_PATH, jobs)
     _save_json(FLOWS_PATH, flows)
 
-    return {"ok": True, "job_id": job_id, "flow_token": flow_token}
+    return {"ok": True, "job_id": job_id}
 
-
-# =============================
-# FRONTEND UYUMLULUK ENDPOINT
-# =============================
+# =========================================================
+# FRONTEND COMPAT: /jobs (OLD FLOW)
+# =========================================================
 @app.post("/jobs")
 async def create_job_compat(
     token: str = Form(...),
-    views: str = Form(...),  # JSON string: [{filename, part}]
+    views: str = Form(...),
     files: List[UploadFile] = File(...),
 ):
-    # 1) flow var mı?
-    flow = flows.get(token)
-    if not flow:
-        flows[token] = {
-            "token": token,
-            "created_at": now_ts(),
-            "parts": {},
-            "audio": None,
-            "status": "collecting",
-            "report": None,
-        }
-        flow = flows[token]
+    flow = flows.setdefault(token, {
+        "token": token,
+        "created_at": now_ts(),
+        "parts": {},
+        "audio": None,
+        "status": "collecting",
+        "report": None,
+    })
 
-    # 2) views parse
     try:
-        views_data = json.loads(views) if views else []
+        views_data = json.loads(views)
     except Exception:
-        raise HTTPException(status_code=400, detail="views JSON parse edilemedi")
+        raise HTTPException(400, "views parse error")
 
-    if not files:
-        raise HTTPException(status_code=400, detail="Dosya yok")
+    name_to_part = {
+        (v.get("filename") or "").strip(): (v.get("part") or "").strip()
+        for v in views_data
+        if v.get("filename") and v.get("part")
+    }
 
-    # 3) filename -> part map
-    name_to_part = {}
-    for v in views_data:
-        fn = (v.get("filename") or "").strip()
-        pk = (v.get("part") or "").strip()
-        if fn and pk:
-            name_to_part[fn] = pk
-
-    # 4) dosyaları parts'a kaydet
     for f in files:
-        original = (f.filename or "").strip()
-        part_key = name_to_part.get(original) or "UNKNOWN"
+        part = name_to_part.get(f.filename, "UNKNOWN")
+        flow["parts"].setdefault(part, [])
 
-        if part_key not in flow["parts"]:
-            flow["parts"][part_key] = []
-
-        ext = safe_ext(original or "file.bin")
+        ext = safe_ext(f.filename or "file.bin")
         stored = f"{uuid.uuid4()}{ext}"
         (UPLOAD_DIR / stored).write_bytes(await f.read())
+        flow["parts"][part].append(make_public_upload_url(stored))
 
-        flow["parts"][part_key].append(make_public_upload_url(stored))
-
-    flows[token] = flow
-    _save_json(FLOWS_PATH, flows)
-
-    # 5) job oluştur
     job_id = str(uuid.uuid4())
     jobs[job_id] = {
         "id": job_id,
@@ -234,20 +241,20 @@ async def create_job_compat(
         "result": None,
         "error": None,
     }
-    flows[token]["status"] = "queued"
 
-    _save_json(JOBS_PATH, jobs)
+    flow["status"] = "queued"
+    flows[token] = flow
+
     _save_json(FLOWS_PATH, flows)
+    _save_json(JOBS_PATH, jobs)
 
-    # 🔑 FRONTEND BUNU BEKLİYOR
     return {"id": job_id, "ok": True}
 
-# -----------------------------
-# WORKER: job alma/verme sözleşmesi (Vast.ai)
-# -----------------------------
+# =========================================================
+# WORKER: JOB FETCH
+# =========================================================
 @app.get("/jobs/next")
-def get_next_job(worker_key: Optional[str] = None):
-    # basit queue: ilk queued job
+def get_next_job():
     for jid, j in jobs.items():
         if j["status"] == "queued":
             j["status"] = "processing"
@@ -261,78 +268,68 @@ def get_next_job(worker_key: Optional[str] = None):
                 j["error"] = "Flow missing"
                 jobs[jid] = j
                 _save_json(JOBS_PATH, jobs)
-                break
+                return JSONResponse({"id": None}, status_code=204)
 
-            # ✅ Worker'ın beklediği net sözleşme
-            # images: [{part_key, urls:[...]}, ...]
-            images_payload = [{"part_key": pk, "urls": urls} for pk, urls in flow["parts"].items()]
+            images = [
+                {"part_key": k, "urls": v}
+                for k, v in flow.get("parts", {}).items()
+            ]
+
             return {
                 "id": j["id"],
                 "flow_token": j["flow_token"],
-                "images": images_payload,
+                "images": images,
                 "audio": flow.get("audio"),
                 "base_url": BASE_URL,
             }
 
     return JSONResponse({"id": None}, status_code=204)
 
+# =========================================================
+# WORKER RESULT
+# =========================================================
 @app.post("/jobs/{job_id}/result")
 def submit_job_result(job_id: str, payload: Dict[str, Any]):
     j = jobs.get(job_id)
     if not j:
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise HTTPException(404, "Job not found")
 
     j["status"] = "done"
     j["result"] = payload
     jobs[job_id] = j
-    _save_json(JOBS_PATH, jobs)
 
-    flow_token = j["flow_token"]
-    flow = flows.get(flow_token)
+    flow = flows.get(j["flow_token"])
     if flow:
         flow["status"] = "done"
         flow["report"] = payload
-        flows[flow_token] = flow
+        flows[j["flow_token"]] = flow
         _save_json(FLOWS_PATH, flows)
 
-    return {"ok": True}
-
-@app.post("/jobs/{job_id}/failed")
-def submit_job_failed(job_id: str, payload: Dict[str, Any]):
-    j = jobs.get(job_id)
-    if not j:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    j["status"] = "failed"
-    j["error"] = payload
-    jobs[job_id] = j
     _save_json(JOBS_PATH, jobs)
-
-    flow_token = j["flow_token"]
-    flow = flows.get(flow_token)
-    if flow:
-        flow["status"] = "failed"
-        flows[flow_token] = flow
-        _save_json(FLOWS_PATH, flows)
-
     return {"ok": True}
 
+# =========================================================
+# JOB STATUS
+# =========================================================
 @app.get("/jobs/{job_id}")
 def get_job(job_id: str):
     j = jobs.get(job_id)
     if not j:
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise HTTPException(404, "Job not found")
     return j
 
+# =========================================================
+# REPORT
+# =========================================================
 @app.get("/reports/{flow_token}")
 def get_report(flow_token: str):
     flow = flows.get(flow_token)
     if not flow:
-        raise HTTPException(status_code=404, detail="Flow not found")
+        raise HTTPException(404, "Flow not found")
     return {
         "token": flow_token,
         "status": flow["status"],
-        "parts": flow["parts"],
+        "parts": flow.get("parts"),
         "audio": flow.get("audio"),
         "report": flow.get("report"),
     }
