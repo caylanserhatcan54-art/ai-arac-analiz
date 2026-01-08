@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from backend.firebase import db
 
@@ -249,3 +250,26 @@ def queue_count():
     docs = db.collection("job_queue").where("status", "==", "queued").limit(50).stream()
     c = sum(1 for _ in docs)
     return {"queued": c}
+
+class StartRequest(BaseModel):
+    vehicle_type: str
+    package: str = "quick"   # "quick" | "detailed"
+    scenario: str = "buy_sell"
+
+@app.post("/analysis/start")
+def analysis_start(body: StartRequest):
+    token = str(uuid.uuid4())
+    now = utcnow()
+
+    # Token oturumu: misafir akışı, 24 saat geçerli
+    db.collection("sessions").document(token).set({
+        "token": token,
+        "vehicle_type": body.vehicle_type,
+        "package": body.package,
+        "scenario": body.scenario,
+        "status": "active",
+        "created_at": now,
+        "expire_at": now + timedelta(hours=24),
+    })
+
+    return {"token": token}
