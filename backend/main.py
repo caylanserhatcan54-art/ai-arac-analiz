@@ -148,7 +148,7 @@ def submit_flow(flow_token: str):
         "id": job_id,
         "flow_token": flow_token,
         "created_at": now_ts(),
-        "status": "queued",      # queued -> processing -> done/failed
+        "status": "queued",
         "claimed_at": None,
         "result": None,
         "error": None,
@@ -160,6 +160,82 @@ def submit_flow(flow_token: str):
     _save_json(FLOWS_PATH, flows)
 
     return {"ok": True, "job_id": job_id, "flow_token": flow_token}
+
+
+# =============================
+# FRONTEND UYUMLULUK ENDPOINT
+# =============================
+@app.post("/jobs")
+async def create_job_compat(
+    token: str = Form(...),
+    views: str = Form(...),  # JSON string: [{filename, part}]
+    files: List[UploadFile] = File(...),
+):
+    # 1) flow var mı?
+    flow = flows.get(token)
+    if not flow:
+        flows[token] = {
+            "token": token,
+            "created_at": now_ts(),
+            "parts": {},
+            "audio": None,
+            "status": "collecting",
+            "report": None,
+        }
+        flow = flows[token]
+
+    # 2) views parse
+    try:
+        views_data = json.loads(views) if views else []
+    except Exception:
+        raise HTTPException(status_code=400, detail="views JSON parse edilemedi")
+
+    if not files:
+        raise HTTPException(status_code=400, detail="Dosya yok")
+
+    # 3) filename -> part map
+    name_to_part = {}
+    for v in views_data:
+        fn = (v.get("filename") or "").strip()
+        pk = (v.get("part") or "").strip()
+        if fn and pk:
+            name_to_part[fn] = pk
+
+    # 4) dosyaları parts'a kaydet
+    for f in files:
+        original = (f.filename or "").strip()
+        part_key = name_to_part.get(original) or "UNKNOWN"
+
+        if part_key not in flow["parts"]:
+            flow["parts"][part_key] = []
+
+        ext = safe_ext(original or "file.bin")
+        stored = f"{uuid.uuid4()}{ext}"
+        (UPLOAD_DIR / stored).write_bytes(await f.read())
+
+        flow["parts"][part_key].append(make_public_upload_url(stored))
+
+    flows[token] = flow
+    _save_json(FLOWS_PATH, flows)
+
+    # 5) job oluştur
+    job_id = str(uuid.uuid4())
+    jobs[job_id] = {
+        "id": job_id,
+        "flow_token": token,
+        "created_at": now_ts(),
+        "status": "queued",
+        "claimed_at": None,
+        "result": None,
+        "error": None,
+    }
+    flows[token]["status"] = "queued"
+
+    _save_json(JOBS_PATH, jobs)
+    _save_json(FLOWS_PATH, flows)
+
+    # 🔑 FRONTEND BUNU BEKLİYOR
+    return {"id": job_id, "ok": True}
 
 # -----------------------------
 # WORKER: job alma/verme sözleşmesi (Vast.ai)
