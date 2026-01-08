@@ -89,8 +89,9 @@ def create_flow():
     _save_json(FLOWS_PATH, flows)
     return {"token": flow_token}
 
-# Kullanıcının parça seçip upload etmesi:
-# part_key örn: "front_left_door", "hood", "rear_bumper", "hinge_bolts", "overall_left"...
+# =============================
+# FLOW UPLOAD (PARÇA BAZLI)
+# =============================
 @app.post("/flows/{flow_token}/upload")
 async def upload_images(
     flow_token: str,
@@ -107,14 +108,18 @@ async def upload_images(
     for f in files:
         ext = safe_ext(f.filename or "file.bin")
         stored = f"{uuid.uuid4()}{ext}"
-        content = await f.read()
-        (UPLOAD_DIR / stored).write_bytes(content)
+        (UPLOAD_DIR / stored).write_bytes(await f.read())
         flow["parts"][part_key].append(make_public_upload_url(stored))
 
     flows[flow_token] = flow
     _save_json(FLOWS_PATH, flows)
-    return {"ok": True, "token": flow_token, "part_key": part_key, "count": len(files), "parts": flow["parts"]}
 
+    return {
+        "ok": True,
+        "token": flow_token,
+        "part_key": part_key,
+        "count": len(files),
+    }
 @app.post("/flows/{flow_token}/upload-audio")
 async def upload_audio(
     flow_token: str,
