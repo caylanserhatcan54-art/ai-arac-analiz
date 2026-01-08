@@ -112,6 +112,7 @@ def create_flow():
 # FLOW IMAGE UPLOAD (PARÇA BAZLI)
 # =========================================================
 @app.post("/flows/{flow_token}/upload")
+@app.post("/flows/{flow_token}/upload/")
 async def upload_images(
     flow_token: str,
     part_key: str = Form(...),
@@ -119,10 +120,10 @@ async def upload_images(
 ):
     flow = flows.get(flow_token)
     if not flow:
-        raise HTTPException(404, "Flow not found")
+        raise HTTPException(status_code=404, detail="Flow not found")
 
-    flow.setdefault("parts", {})
-    flow["parts"].setdefault(part_key, [])
+    if part_key not in flow["parts"]:
+        flow["parts"][part_key] = []
 
     for f in files:
         ext = safe_ext(f.filename or "file.bin")
