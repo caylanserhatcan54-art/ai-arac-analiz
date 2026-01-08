@@ -112,15 +112,24 @@ def create_flow():
 # FLOW IMAGE UPLOAD (PARÇA BAZLI)
 # =========================================================
 @app.post("/flows/{flow_token}/upload")
-@app.post("/flows/{flow_token}/upload/")
 async def upload_images(
     flow_token: str,
     part_key: str = Form(...),
     files: List[UploadFile] = File(...),
 ):
     flow = flows.get(flow_token)
+
+    # ✅ FLOW YOKSA OLUŞTUR (KÖK ÇÖZÜM)
     if not flow:
-        raise HTTPException(status_code=404, detail="Flow not found")
+        flows[flow_token] = {
+            "token": flow_token,
+            "created_at": now_ts(),
+            "parts": {},
+            "audio": None,
+            "status": "collecting",
+            "report": None,
+        }
+        flow = flows[flow_token]
 
     if part_key not in flow["parts"]:
         flow["parts"][part_key] = []
