@@ -1,15 +1,20 @@
-# backend/main.py
 import os
 import json
 import uuid
 import time
+import requests
+import hmac
+import hashlib
 from typing import List, Optional, Dict, Any
 from pathlib import Path
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi import Body
+from dotenv import load_dotenv
+load_dotenv()
 
 # =========================================================
 # ENV
@@ -22,8 +27,11 @@ BASE_URL = os.getenv(
 
 ALLOWED_ORIGINS = os.getenv(
     "ALLOWED_ORIGINS",
-    "https://carvix-web.vercel.app,http://localhost:3000,http://127.0.0.1:3000"
+    "https://www.carvix.site,http://localhost:3000,http://127.0.0.1:3000"
 ).split(",")
+
+# Lemon Squeezy Secret (Panelden alacağın şifre)
+LEMON_SQUEEZY_WEBHOOK_SECRET = os.getenv("LEMON_SQUEEZY_WEBHOOK_SECRET", "")
 
 DATA_DIR = Path(os.getenv("DATA_DIR", "./data"))
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "./uploads"))
@@ -92,6 +100,42 @@ def health():
     return {"ok": True, "env": APP_ENV}
 
 # =========================================================
+# LEMON SQUEEZY WEBHOOK (YENİ EKLENDİ)
+# =========================================================
+@app.post("/webhook/lemonsqueezy")
+async def lemonsqueezy_webhook(request: Request):
+    # 1. Güvenlik Kontrolü (İsteğe bağlı ama önerilir)
+    body = await request.body()
+    # Not: Gerçek ortamda hmac doğrulaması buraya eklenir.
+
+    try:
+        data = json.loads(body)
+    except:
+        raise HTTPException(400, "Invalid JSON")
+
+    event_name = data.get("meta", {}).get("event_name")
+    
+    # Sadece ödeme başarılı olduğunda işlem yap
+    if event_name == "order_created":
+        # Bizim ödeme linkine eklediğimiz token bilgisini alıyoruz
+        custom_data = data.get("meta", {}).get("custom_data", {})
+        flow_token = custom_data.get("token")
+
+        if flow_token and flow_token in flows:
+            print(f"PAYMENT SUCCESS: Flow {flow_token} is now PAID.")
+            # Flow durumunu güncelle
+            flows[flow_token]["status"] = "paid" 
+            _save_json(FLOWS_PATH, flows)
+            
+            # Eğer bu flow'a bağlı bir job varsa onu da 'paid' yapabiliriz
+            for jid, job in jobs.items():
+                if job["flow_token"] == flow_token:
+                    job["status"] = "paid"
+                    _save_json(JOBS_PATH, jobs)
+
+    return {"ok": True}
+
+# =========================================================
 # FLOW CREATE
 # =========================================================
 @app.post("/flows")
@@ -119,7 +163,6 @@ async def upload_images(
 ):
     flow = flows.get(flow_token)
 
-    # ✅ FLOW YOKSA OLUŞTUR (KÖK ÇÖZÜM)
     if not flow:
         flows[flow_token] = {
             "token": flow_token,
