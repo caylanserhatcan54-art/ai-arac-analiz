@@ -25,12 +25,14 @@ BASE_URL = os.getenv(
     "https://ai-arac-analiz-backend.onrender.com"
 ).rstrip("/")
 
-ALLOWED_ORIGINS = os.getenv(
-    "ALLOWED_ORIGINS",
-    "https://www.carvix.site,http://localhost:3000,http://127.0.0.1:3000"
-).split(",")
+# CORS için izin verilen adresleri daha esnek hale getiriyoruz
+ALLOWED_ORIGINS = [
+    "https://www.carvix.site",
+    "https://carvix.site",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000"
+]
 
-# Lemon Squeezy Secret (Panelden alacağın şifre)
 LEMON_SQUEEZY_WEBHOOK_SECRET = os.getenv("LEMON_SQUEEZY_WEBHOOK_SECRET", "")
 
 DATA_DIR = Path(os.getenv("DATA_DIR", "./data"))
@@ -82,9 +84,10 @@ jobs: Dict[str, Any] = _load_json(JOBS_PATH, {})
 # =========================================================
 app = FastAPI(title="Carvix Backend", version="1.0.0")
 
+# ✅ CORS AYARI (Kesin Çözüm)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in ALLOWED_ORIGINS if o.strip()],
+    allow_origins=["*"], # Tüm originlere izin vererek CORS hatasını bitiriyoruz
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -100,14 +103,11 @@ def health():
     return {"ok": True, "env": APP_ENV}
 
 # =========================================================
-# LEMON SQUEEZY WEBHOOK (YENİ EKLENDİ)
+# LEMON SQUEEZY WEBHOOK
 # =========================================================
 @app.post("/webhook/lemonsqueezy")
 async def lemonsqueezy_webhook(request: Request):
-    # 1. Güvenlik Kontrolü (İsteğe bağlı ama önerilir)
     body = await request.body()
-    # Not: Gerçek ortamda hmac doğrulaması buraya eklenir.
-
     try:
         data = json.loads(body)
     except:
@@ -115,19 +115,15 @@ async def lemonsqueezy_webhook(request: Request):
 
     event_name = data.get("meta", {}).get("event_name")
     
-    # Sadece ödeme başarılı olduğunda işlem yap
     if event_name == "order_created":
-        # Bizim ödeme linkine eklediğimiz token bilgisini alıyoruz
         custom_data = data.get("meta", {}).get("custom_data", {})
         flow_token = custom_data.get("token")
 
         if flow_token and flow_token in flows:
             print(f"PAYMENT SUCCESS: Flow {flow_token} is now PAID.")
-            # Flow durumunu güncelle
             flows[flow_token]["status"] = "paid" 
             _save_json(FLOWS_PATH, flows)
             
-            # Eğer bu flow'a bağlı bir job varsa onu da 'paid' yapabiliriz
             for jid, job in jobs.items():
                 if job["flow_token"] == flow_token:
                     job["status"] = "paid"
@@ -136,10 +132,10 @@ async def lemonsqueezy_webhook(request: Request):
     return {"ok": True}
 
 # =========================================================
-# FLOW CREATE
+# FLOW CREATE (Async ve Body desteği eklendi)
 # =========================================================
 @app.post("/flows")
-def create_flow():
+async def create_flow(request: Request):
     token = str(uuid.uuid4())
     flows[token] = {
         "token": token,
