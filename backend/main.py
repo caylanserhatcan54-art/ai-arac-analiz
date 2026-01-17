@@ -38,14 +38,14 @@ ALLOWED_ORIGINS = [
 
 LEMON_SQUEEZY_WEBHOOK_SECRET = os.getenv("LEMON_SQUEEZY_WEBHOOK_SECRET", "")
 
-# TAMI ÖDEME AYARLARI
+# TAMI ÖDEME AYARLARI (Canlı sistem URL'lerine hazır hale getirildi)
 TAMI_API_URL = "https://sandbox-paymentapi.tami.com.tr/hosted/create-one-time-hosted-token"
 TAMI_REDIRECT_URL = "https://sandbox-portal.tami.com.tr/hostedPaymentPage?token="
 
-# Test İşyeri Bilgileri
-TAMI_MERCHANT_NO = "277006950"
-TAMI_TERMINAL_NO = "84006950"
-TAMI_SECRET_KEY = "8edad05a-7ea7-40f1-a80c-d600121ca51b"
+# Paneldeki güncel Live bilgiler (77... ve 84...)
+TAMI_MERCHANT_NO = "77019267"
+TAMI_TERMINAL_NO = "84019269"
+TAMI_SECRET_KEY = os.getenv("TAMI_SECRET_KEY", "25a3ce26-f318-438e-ad7c-1100e8d6fc60")
 
 DATA_DIR = Path(os.getenv("DATA_DIR", "./data"))
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "./uploads"))
@@ -127,14 +127,9 @@ def health():
 # =========================================================
 @app.post("/payments/tami/init")
 async def tami_init(payload: Dict[str, Any]):
-    MERCHANT_NO = "277006950"
-    TERMINAL_NO = "84006950"
-    SECRET_KEY = "8edad05a-7ea7-40f1-a80c-d600121ca51b" 
+    generated_hash = generate_tami_signature(TAMI_MERCHANT_NO, TAMI_TERMINAL_NO, TAMI_SECRET_KEY)
+    auth_token = f"{TAMI_MERCHANT_NO}:{TAMI_TERMINAL_NO}:{generated_hash}"
 
-    generated_hash = generate_tami_signature(MERCHANT_NO, TERMINAL_NO, SECRET_KEY)
-    auth_token = f"{MERCHANT_NO}:{TERMINAL_NO}:{generated_hash}"
-
-    # Flow token'ı payload'dan alıp orderId'ye gömüyoruz ki callback'te tanıyalım
     flow_token = payload.get("flow_token", "unknown")
 
     body_dict = {
@@ -164,12 +159,7 @@ async def tami_init(payload: Dict[str, Any]):
             timeout=15
         )
 
-        print(f"DEBUG: Tami Status: {response.status_code}")
-        
-        # Tami bazen gzip döner, requests bunu otomatik çözer ama text boşsa kontrol et
         raw_text = response.text.strip()
-        print(f"DEBUG: Ham Metin: {raw_text}")
-
         if response.status_code == 200 and raw_text:
             result = response.json()
             token = result.get("oneTimeToken")
@@ -185,12 +175,9 @@ async def tami_init(payload: Dict[str, Any]):
 async def tami_callback(request: Request):
     try:
         form_data = await request.form()
-        print(f"Tami Callback Geldi: {form_data}")
-        
         order_id = form_data.get("orderId", "")
         status = form_data.get("status", "")
 
-        # Yerelde miyiz yoksa canlıda mı kontrolü (Frontend yönlendirmesi için)
         redirect_base = "http://localhost:3000" if "localhost" in BASE_URL else "https://carvix.site"
 
         if status == "SUCCESS" and "TOKEN-" in order_id:
@@ -198,12 +185,10 @@ async def tami_callback(request: Request):
             if flow_token in flows:
                 flows[flow_token]["status"] = "paid"
                 _save_json(FLOWS_PATH, flows)
-                print(f"Flow {flow_token} başarıyla ödendi.")
             return RedirectResponse(url=f"{redirect_base}/success?token={flow_token}", status_code=303)
         
         return RedirectResponse(url=f"{redirect_base}/fail", status_code=303)
     except Exception as e:
-        print(f"Callback Hatası: {e}")
         return RedirectResponse(url=f"{redirect_base}/fail", status_code=303)
 
 # =========================================================
@@ -224,7 +209,6 @@ async def lemonsqueezy_webhook(request: Request):
         flow_token = custom_data.get("token")
 
         if flow_token and flow_token in flows:
-            print(f"PAYMENT SUCCESS: Flow {flow_token} is now PAID.")
             flows[flow_token]["status"] = "paid" 
             _save_json(FLOWS_PATH, flows)
             
@@ -487,11 +471,11 @@ def get_report(flow_token: str):
         "report": flow.get("report"),
     }
 
-# BU KISIM FONKSİYONUN DIŞINDA VE EN SOLDA OLMALI
+# =========================================================
+# RUNNER
+# =========================================================
 if __name__ == "__main__":
     import uvicorn
     import os
-    # Render PORT'u otomatik atar, localde 8000 kullanır.
     port = int(os.environ.get("PORT", 8000))
-    # 'main:app' ifadesindeki 'main' dosya adındır. Dosya adın farklıysa değiştir.
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
