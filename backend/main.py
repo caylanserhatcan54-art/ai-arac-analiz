@@ -88,9 +88,16 @@ def make_public_upload_url(stored_name: str) -> str:
 
 # --- TAMI İMZA FONKSİYONU ---
 def generate_tami_signature(merchant_number: str, terminal_number: str, secret_key: str) -> str:
-    text = f"{merchant_number}{terminal_number}{secret_key}"
+    # Tüm değerlerin string olduğundan ve boşluk içermediğinden emin olalım
+    m = str(merchant_number).strip()
+    t = str(terminal_number).strip()
+    s = str(secret_key).strip()
+    
+    text = f"{m}{t}{s}"
+    # UTF-8 encoding ile hashle
     hash_object = hashlib.sha256(text.encode('utf-8'))
     binary_hash = hash_object.digest()
+    # Base64 ile encode et
     token = base64.b64encode(binary_hash).decode('utf-8')
     return token
 
@@ -131,8 +138,6 @@ async def tami_init(request: Request):
         payload = await request.json()
         flow_token = payload.get("flow_token", "unknown")
 
-        # 1. ADIM: İmzayı Tekrar Doğrula
-        # Terminal no ve Merchant no'nun başındaki/sonundaki gizli boşlukları temizle
         m_no = TAMI_MERCHANT_NO.strip()
         t_no = TAMI_TERMINAL_NO.strip()
         s_key = TAMI_SECRET_KEY.strip()
@@ -140,32 +145,32 @@ async def tami_init(request: Request):
         generated_hash = generate_tami_signature(m_no, t_no, s_key)
         auth_token = f"{m_no}:{t_no}:{generated_hash}"
 
-        # 2. ADIM: Gövdeyi (Body) Tami'nin en sevdiği sade formatta hazırla
         body_dict = {
-            "amount": 129.9, # Kuruş hanesini tek haneye düşürdük
-            "orderId": f"TOKEN{int(time.time())}", # Çakışma olmaması için zamana duyarlı ID
+            "amount": 129.90, 
+            "orderId": f"TK{int(time.time())}", # Daha kısa bir ID
             "successCallbackUrl": f"{BASE_URL}/payments/tami/callback",
             "failCallbackUrl": f"{BASE_URL}/payments/tami/callback",
             "mobilePhoneNumber": "905346484700"
         }
         
-        json_data = json.dumps(body_dict)
-
-        # 3. ADIM: Headerları Sadeleştir (Content-Length bazen sorun çıkarabilir)
         headers = {
             "PG-Auth-Token": auth_token,
             "correlationId": str(uuid.uuid4()),
-            "Content-Type": "application/json",
-            "Accept": "application/json"
+            "Accept": "application/json",
+            "Content-Type": "application/json"
         }
 
-        # 4. ADIM: İsteği At
+        # DİKKAT: json=body_dict kullanarak gönderiyoruz, requests bunu otomatik JSON yapar.
         response = requests.post(
             "https://paymentapi.tami.com.tr/hosted/create-one-time-hosted-token",
-            data=json_data, 
+            json=body_dict, 
             headers=headers,
-            timeout=15
+            timeout=20
         )
+
+        # Log alalım (Render panelinde ne olduğunu görebilmek için)
+        print(f"Tami Status: {response.status_code}")
+        print(f"Tami Response: {response.text}")
 
         if response.status_code == 200:
             result = response.json()
@@ -173,15 +178,18 @@ async def tami_init(request: Request):
             if token:
                 return {"paymentUrl": f"https://portal.tami.com.tr/hostedPaymentPage?token={token}"}
 
-        # Hata durumunda Tami'nin bize ne dediğini tam olarak görelim
-        return JSONResponse(
-            status_code=400, 
-            content={"error": "Tami Reddetti", "detail": response.text}
-        )
+        return JSONResponse(status_code=400, content={
+            "error": "Tami Yanit Hatasi", 
+            "status": response.status_code,
+            "detail": response.text
+        })
 
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": "Backend Hatasi", "detail": str(e)})
-
+        # Hatanın ne olduğunu tam anlamak için detail kısmını genişletiyoruz
+        import traceback
+        error_details = traceback.format_exc()
+        return JSONResponse(status_code=500, content={"error": "Backend Detayli Hata", "detail": str(e), "trace": error_details})
+        
 # TAMI WEBHOOK/CALLBACK (ÖDEME SONUCU)
 @app.post("/payments/tami/callback")
 async def tami_callback(request: Request):
