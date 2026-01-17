@@ -126,51 +126,61 @@ def health():
 # TAMI ÖDEME BAŞLATMA
 # =========================================================
 @app.post("/payments/tami/init")
-async def tami_init(payload: Dict[str, Any] = Body(...)): # Body ekledik
-    generated_hash = generate_tami_signature(TAMI_MERCHANT_NO, TAMI_TERMINAL_NO, TAMI_SECRET_KEY)
-    auth_token = f"{TAMI_MERCHANT_NO}:{TAMI_TERMINAL_NO}:{generated_hash}"
-
-    flow_token = payload.get("flow_token", "unknown")
-    
-    # ÖNEMLİ: Tami bazı durumlarda amount'u float değil, kuruş cinsinden (12990 gibi) 
-    # veya string olarak bekleyebilir. Ama şimdilik float deniyoruz.
-    body_dict = {
-        "amount": 129.90, 
-        "orderId": f"TOKEN-{flow_token[:20]}", # ID çakışmaması için flow_token'ı temiz tutun
-        "successCallbackUrl": f"{BASE_URL}/payments/tami/callback",
-        "failCallbackUrl": f"{BASE_URL}/payments/tami/callback",
-        "mobilePhoneNumber": "905346484700"
-    }
-    
-    json_data = json.dumps(body_dict)
-
-    headers = {
-        "PG-Auth-Token": auth_token,
-        "correlationId": str(uuid.uuid4()),
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "Content-Length": str(len(json_data)),
-        "Accept-Encoding": "gzip, deflate"
-    }
-
+async def tami_init(request: Request):
     try:
+        payload = await request.json()
+        flow_token = payload.get("flow_token", "unknown")
+
+        # 1. ADIM: İmzayı Tekrar Doğrula
+        # Terminal no ve Merchant no'nun başındaki/sonundaki gizli boşlukları temizle
+        m_no = TAMI_MERCHANT_NO.strip()
+        t_no = TAMI_TERMINAL_NO.strip()
+        s_key = TAMI_SECRET_KEY.strip()
+        
+        generated_hash = generate_tami_signature(m_no, t_no, s_key)
+        auth_token = f"{m_no}:{t_no}:{generated_hash}"
+
+        # 2. ADIM: Gövdeyi (Body) Tami'nin en sevdiği sade formatta hazırla
+        body_dict = {
+            "amount": 129.9, # Kuruş hanesini tek haneye düşürdük
+            "orderId": f"TOKEN{int(time.time())}", # Çakışma olmaması için zamana duyarlı ID
+            "successCallbackUrl": f"{BASE_URL}/payments/tami/callback",
+            "failCallbackUrl": f"{BASE_URL}/payments/tami/callback",
+            "mobilePhoneNumber": "905346484700"
+        }
+        
+        json_data = json.dumps(body_dict)
+
+        # 3. ADIM: Headerları Sadeleştir (Content-Length bazen sorun çıkarabilir)
+        headers = {
+            "PG-Auth-Token": auth_token,
+            "correlationId": str(uuid.uuid4()),
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+        }
+
+        # 4. ADIM: İsteği At
         response = requests.post(
-            TAMI_API_URL,
+            "https://paymentapi.tami.com.tr/hosted/create-one-time-hosted-token",
             data=json_data, 
             headers=headers,
             timeout=15
         )
 
-        raw_text = response.text.strip()
-        if response.status_code == 200 and raw_text:
+        if response.status_code == 200:
             result = response.json()
             token = result.get("oneTimeToken")
             if token:
-                return {"paymentUrl": f"{TAMI_REDIRECT_URL}{token}"}
+                return {"paymentUrl": f"https://portal.tami.com.tr/hostedPaymentPage?token={token}"}
 
-        return JSONResponse(status_code=400, content={"error": "Tami Bos Dondu", "detail": raw_text})
+        # Hata durumunda Tami'nin bize ne dediğini tam olarak görelim
+        return JSONResponse(
+            status_code=400, 
+            content={"error": "Tami Reddetti", "detail": response.text}
+        )
+
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": "Sistem hatasi", "detail": str(e)})
+        return JSONResponse(status_code=500, content={"error": "Backend Hatasi", "detail": str(e)})
 
 # TAMI WEBHOOK/CALLBACK (ÖDEME SONUCU)
 @app.post("/payments/tami/callback")
