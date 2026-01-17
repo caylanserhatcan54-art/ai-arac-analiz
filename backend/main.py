@@ -5,15 +5,18 @@ import time
 import requests
 import hmac
 import hashlib
+import base64
+import gzip
 from typing import List, Optional, Dict, Any
 from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi import Body
 from dotenv import load_dotenv
+
 load_dotenv()
 
 # =========================================================
@@ -25,7 +28,7 @@ BASE_URL = os.getenv(
     "https://ai-arac-analiz-backend.onrender.com"
 ).rstrip("/")
 
-# CORS için izin verilen adresleri daha esnek hale getiriyoruz
+# CORS için izin verilen adresler
 ALLOWED_ORIGINS = [
     "https://www.carvix.site",
     "https://carvix.site",
@@ -34,6 +37,15 @@ ALLOWED_ORIGINS = [
 ]
 
 LEMON_SQUEEZY_WEBHOOK_SECRET = os.getenv("LEMON_SQUEEZY_WEBHOOK_SECRET", "")
+
+# TAMI ÖDEME AYARLARI
+TAMI_API_URL = "https://sandbox-paymentapi.tami.com.tr/hosted/create-one-time-hosted-token"
+TAMI_REDIRECT_URL = "https://sandbox-portal.tami.com.tr/hostedPaymentPage?token="
+
+# Test İşyeri Bilgileri
+TAMI_MERCHANT_NO = "277006950"
+TAMI_TERMINAL_NO = "84006950"
+TAMI_SECRET_KEY = "8edad05a-7ea7-40f1-a80c-d600121ca51b"
 
 DATA_DIR = Path(os.getenv("DATA_DIR", "./data"))
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "./uploads"))
@@ -65,13 +77,22 @@ def now_ts() -> int:
     return int(time.time())
 
 def safe_ext(filename: str) -> str:
-    ext = Path(filename).suffix.lower()
+    path_obj = Path(filename)
+    ext = path_obj.suffix.lower()
     if ext in [".jpg", ".jpeg", ".png", ".webp", ".mp3", ".wav", ".m4a", ".mp4"]:
         return ext
     return ".bin"
 
 def make_public_upload_url(stored_name: str) -> str:
     return f"{BASE_URL}/uploads/{stored_name}"
+
+# --- TAMI İMZA FONKSİYONU ---
+def generate_tami_signature(merchant_number: str, terminal_number: str, secret_key: str) -> str:
+    text = f"{merchant_number}{terminal_number}{secret_key}"
+    hash_object = hashlib.sha256(text.encode('utf-8'))
+    binary_hash = hash_object.digest()
+    token = base64.b64encode(binary_hash).decode('utf-8')
+    return token
 
 # =========================================================
 # STATE (FILE BASED)
@@ -84,10 +105,9 @@ jobs: Dict[str, Any] = _load_json(JOBS_PATH, {})
 # =========================================================
 app = FastAPI(title="Carvix Backend", version="1.0.0")
 
-# ✅ CORS AYARI (Kesin Çözüm)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Tüm originlere izin vererek CORS hatasını bitiriyoruz
+    allow_origins=["*"], 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -101,6 +121,90 @@ app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 @app.get("/health")
 def health():
     return {"ok": True, "env": APP_ENV}
+
+# =========================================================
+# TAMI ÖDEME BAŞLATMA
+# =========================================================
+@app.post("/payments/tami/init")
+async def tami_init(payload: Dict[str, Any]):
+    MERCHANT_NO = "277006950"
+    TERMINAL_NO = "84006950"
+    SECRET_KEY = "8edad05a-7ea7-40f1-a80c-d600121ca51b" 
+
+    generated_hash = generate_tami_signature(MERCHANT_NO, TERMINAL_NO, SECRET_KEY)
+    auth_token = f"{MERCHANT_NO}:{TERMINAL_NO}:{generated_hash}"
+
+    # Flow token'ı payload'dan alıp orderId'ye gömüyoruz ki callback'te tanıyalım
+    flow_token = payload.get("flow_token", "unknown")
+
+    body_dict = {
+        "amount": 129.90, 
+        "orderId": f"TOKEN-{flow_token[:20]}",
+        "successCallbackUrl": f"{BASE_URL}/payments/tami/callback",
+        "failCallbackUrl": f"{BASE_URL}/payments/tami/callback",
+        "mobilePhoneNumber": "905346484700"
+    }
+    
+    json_data = json.dumps(body_dict)
+
+    headers = {
+        "PG-Auth-Token": auth_token,
+        "correlationId": str(uuid.uuid4()),
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Content-Length": str(len(json_data)),
+        "Accept-Encoding": "gzip, deflate"
+    }
+
+    try:
+        response = requests.post(
+            TAMI_API_URL,
+            data=json_data, 
+            headers=headers,
+            timeout=15
+        )
+
+        print(f"DEBUG: Tami Status: {response.status_code}")
+        
+        # Tami bazen gzip döner, requests bunu otomatik çözer ama text boşsa kontrol et
+        raw_text = response.text.strip()
+        print(f"DEBUG: Ham Metin: {raw_text}")
+
+        if response.status_code == 200 and raw_text:
+            result = response.json()
+            token = result.get("oneTimeToken")
+            if token:
+                return {"paymentUrl": f"{TAMI_REDIRECT_URL}{token}"}
+
+        return JSONResponse(status_code=400, content={"error": "Tami Bos Dondu", "detail": raw_text})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": "Sistem hatasi", "detail": str(e)})
+
+# TAMI WEBHOOK/CALLBACK (ÖDEME SONUCU)
+@app.post("/payments/tami/callback")
+async def tami_callback(request: Request):
+    try:
+        form_data = await request.form()
+        print(f"Tami Callback Geldi: {form_data}")
+        
+        order_id = form_data.get("orderId", "")
+        status = form_data.get("status", "")
+
+        # Yerelde miyiz yoksa canlıda mı kontrolü (Frontend yönlendirmesi için)
+        redirect_base = "http://localhost:3000" if "localhost" in BASE_URL else "https://carvix.site"
+
+        if status == "SUCCESS" and "TOKEN-" in order_id:
+            flow_token = order_id.replace("TOKEN-", "")
+            if flow_token in flows:
+                flows[flow_token]["status"] = "paid"
+                _save_json(FLOWS_PATH, flows)
+                print(f"Flow {flow_token} başarıyla ödendi.")
+            return RedirectResponse(url=f"{redirect_base}/success?token={flow_token}", status_code=303)
+        
+        return RedirectResponse(url=f"{redirect_base}/fail", status_code=303)
+    except Exception as e:
+        print(f"Callback Hatası: {e}")
+        return RedirectResponse(url=f"{redirect_base}/fail", status_code=303)
 
 # =========================================================
 # LEMON SQUEEZY WEBHOOK
@@ -132,7 +236,7 @@ async def lemonsqueezy_webhook(request: Request):
     return {"ok": True}
 
 # =========================================================
-# FLOW CREATE (Async ve Body desteği eklendi)
+# FLOW CREATE
 # =========================================================
 @app.post("/flows")
 async def create_flow(request: Request):
@@ -382,3 +486,12 @@ def get_report(flow_token: str):
         "audio": flow.get("audio"),
         "report": flow.get("report"),
     }
+
+# BU KISIM FONKSİYONUN DIŞINDA VE EN SOLDA OLMALI
+if __name__ == "__main__":
+    import uvicorn
+    import os
+    # Render PORT'u otomatik atar, localde 8000 kullanır.
+    port = int(os.environ.get("PORT", 8000))
+    # 'main:app' ifadesindeki 'main' dosya adındır. Dosya adın farklıysa değiştir.
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)

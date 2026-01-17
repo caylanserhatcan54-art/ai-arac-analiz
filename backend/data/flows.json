@@ -1,0 +1,82 @@
+{
+  "cf648b75-e869-4d31-ad2a-e0daaa3479dc": {
+    "token": "cf648b75-e869-4d31-ad2a-e0daaa3479dc",
+    "created_at": 1768607624,
+    "parts": {},
+    "audio": null,
+    "status": "collecting",
+    "report": null
+  },
+  "6f946fa4-d7ca-46d1-bd9c-68f7e857c766": {
+    "token": "6f946fa4-d7ca-46d1-bd9c-68f7e857c766",
+    "created_at": 1768607624,
+    "parts": {
+      "KAPI_DIREKLERI": [
+        "https://ai-arac-analiz-backend.onrender.com/uploads/12169b85-1175-48a3-8a19-3b98cd1a7e87.png",
+        "https://ai-arac-analiz-backend.onrender.com/uploads/8321dd01-3a4e-48da-845e-cce082ec703b.png",
+        "https://ai-arac-analiz-backend.onrender.com/uploads/6d62561f-d0ee-4327-8086-a1f41c065809.png",
+        "https://ai-arac-analiz-backend.onrender.com/uploads/01113a1a-0027-4930-b06f-f0204b73082d.png"
+      ],
+      "KAPI_MENTESE": [
+        "https://ai-arac-analiz-backend.onrender.com/uploads/dffb3d68-343a-472d-a67e-aad4184cc31e.png"
+      ],
+      "KAPI_VIDALARI": [
+        "https://ai-arac-analiz-backend.onrender.com/uploads/9d70bab0-714e-452d-941a-bec9bb1ddb52.png"
+      ],
+      "KAPUT_MENTESE": [
+        "https://ai-arac-analiz-backend.onrender.com/uploads/7f1c6411-b94f-4e61-a3f0-49399b0be72f.png"
+      ]
+    },
+    "audio": null,
+    "status": "queued",
+    "report": null
+  },
+  "2c5b6c27-7824-4798-9268-2a23707dfaff": {
+    "token": "2c5b6c27-7824-4798-9268-2a23707dfaff",
+    "created_at": 1768607775,
+    "parts": {},
+    "audio": null,
+    "status": "collecting",
+    "report": null
+  },
+  "14f6977d-6675-4133-8d5a-11ff1b20b586": {
+    "token": "14f6977d-6675-4133-8d5a-11ff1b20b586",
+    "created_at": 1768607912,
+    "parts": {},
+    "audio": null,
+    "status": "collecting",
+    "report": null
+  },
+  "8109c89b-ca21-4bda-bfb3-f5609242fc1c": {
+    "token": "8109c89b-ca21-4bda-bfb3-f5609242fc1c",
+    "created_at": 1768608041,
+    "parts": {},
+    "audio": null,
+    "status": "collecting",
+    "report": null
+  },
+  "4494dc63-32a7-4fcd-aeb2-2e4acc1c3450": {
+    "token": "4494dc63-32a7-4fcd-aeb2-2e4acc1c3450",
+    "created_at": 1768608190,
+    "parts": {},
+    "audio": null,
+    "status": "collecting",
+    "report": null
+  },
+  "198374fd-d961-4d6d-9712-c32f5e67a74e": {
+    "token": "198374fd-d961-4d6d-9712-c32f5e67a74e",
+    "created_at": 1768608286,
+    "parts": {},
+    "audio": null,
+    "status": "collecting",
+    "report": null
+  },
+  "7e4d6c92-2d3b-4bca-9f79-0aceb38dc415": {
+    "token": "7e4d6c92-2d3b-4bca-9f79-0aceb38dc415",
+    "created_at": 1768608379,
+    "parts": {},
+    "audio": null,
+    "status": "collecting",
+    "report": null
+  }
+}
