@@ -143,11 +143,12 @@ async def tami_init(request: Request):
         s_key = TAMI_SECRET_KEY.strip()
         
         generated_hash = generate_tami_signature(m_no, t_no, s_key)
+        # Tami PG-Auth-Token formatı: Merchant:Terminal:Signature
         auth_token = f"{m_no}:{t_no}:{generated_hash}"
 
         body_dict = {
             "amount": 129.90, 
-            "orderId": f"TK{int(time.time())}", # Daha kısa bir ID
+            "orderId": f"TK{int(time.time())}",
             "successCallbackUrl": f"{BASE_URL}/payments/tami/callback",
             "failCallbackUrl": f"{BASE_URL}/payments/tami/callback",
             "mobilePhoneNumber": "905346484700"
@@ -156,40 +157,45 @@ async def tami_init(request: Request):
         headers = {
             "PG-Auth-Token": auth_token,
             "correlationId": str(uuid.uuid4()),
+            "Content-Type": "application/json",
             "Accept": "application/json",
-            "Content-Type": "application/json"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         }
 
-        # DİKKAT: json=body_dict kullanarak gönderiyoruz, requests bunu otomatik JSON yapar.
+        # İsteği atıyoruz
         response = requests.post(
             "https://paymentapi.tami.com.tr/hosted/create-one-time-hosted-token",
             json=body_dict, 
             headers=headers,
-            timeout=20
+            timeout=20,
+            verify=True # SSL doğrulaması açık
         )
 
-        # Log alalım (Render panelinde ne olduğunu görebilmek için)
-        print(f"Tami Status: {response.status_code}")
-        print(f"Tami Response: {response.text}")
+        # DEBUG: Tami'den gelen yanıtın JSON olup olmadığını kontrol et
+        print(f"DEBUG: Status Code: {response.status_code}")
+        print(f"DEBUG: Raw Text: {response.text}")
 
-        if response.status_code == 200:
+        # Eğer yanıt boşsa veya JSON değilse bunu yakalayalım
+        if not response.text or response.status_code != 200:
+             return JSONResponse(status_code=400, content={
+                "error": "Tami Sunucu Hatasi",
+                "http_status": response.status_code,
+                "raw_response": response.text[:500] # Hata sayfasını (HTML ise) konsolda görebilmek için
+            })
+
+        try:
             result = response.json()
             token = result.get("oneTimeToken")
             if token:
                 return {"paymentUrl": f"https://portal.tami.com.tr/hostedPaymentPage?token={token}"}
-
-        return JSONResponse(status_code=400, content={
-            "error": "Tami Yanit Hatasi", 
-            "status": response.status_code,
-            "detail": response.text
-        })
+            else:
+                return JSONResponse(status_code=400, content={"error": "Token Bulunamadi", "detail": result})
+        except Exception:
+            return JSONResponse(status_code=400, content={"error": "JSON Parse Hatasi", "raw_text": response.text})
 
     except Exception as e:
-        # Hatanın ne olduğunu tam anlamak için detail kısmını genişletiyoruz
-        import traceback
-        error_details = traceback.format_exc()
-        return JSONResponse(status_code=500, content={"error": "Backend Detayli Hata", "detail": str(e), "trace": error_details})
-        
+        return JSONResponse(status_code=500, content={"error": "Sistem Hatasi", "detail": str(e)})
+
 # TAMI WEBHOOK/CALLBACK (ÖDEME SONUCU)
 @app.post("/payments/tami/callback")
 async def tami_callback(request: Request):
