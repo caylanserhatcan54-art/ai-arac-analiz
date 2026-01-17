@@ -126,15 +126,17 @@ def health():
 # TAMI ÖDEME BAŞLATMA
 # =========================================================
 @app.post("/payments/tami/init")
-async def tami_init(payload: Dict[str, Any]):
+async def tami_init(payload: Dict[str, Any] = Body(...)): # Body ekledik
     generated_hash = generate_tami_signature(TAMI_MERCHANT_NO, TAMI_TERMINAL_NO, TAMI_SECRET_KEY)
     auth_token = f"{TAMI_MERCHANT_NO}:{TAMI_TERMINAL_NO}:{generated_hash}"
 
     flow_token = payload.get("flow_token", "unknown")
-
+    
+    # ÖNEMLİ: Tami bazı durumlarda amount'u float değil, kuruş cinsinden (12990 gibi) 
+    # veya string olarak bekleyebilir. Ama şimdilik float deniyoruz.
     body_dict = {
         "amount": 129.90, 
-        "orderId": f"TOKEN-{flow_token[:20]}",
+        "orderId": f"TOKEN-{flow_token[:20]}", # ID çakışmaması için flow_token'ı temiz tutun
         "successCallbackUrl": f"{BASE_URL}/payments/tami/callback",
         "failCallbackUrl": f"{BASE_URL}/payments/tami/callback",
         "mobilePhoneNumber": "905346484700"
