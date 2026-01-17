@@ -38,9 +38,9 @@ ALLOWED_ORIGINS = [
 
 LEMON_SQUEEZY_WEBHOOK_SECRET = os.getenv("LEMON_SQUEEZY_WEBHOOK_SECRET", "")
 
-# TAMI ÖDEME AYARLARI (Canlı sistem URL'lerine hazır hale getirildi)
-TAMI_API_URL = "https://sandbox-paymentapi.tami.com.tr/hosted/create-one-time-hosted-token"
-TAMI_REDIRECT_URL = "https://sandbox-portal.tami.com.tr/hostedPaymentPage?token="
+# TAMI ÖDEME AYARLARI (CANLI MOD)
+TAMI_API_URL = "https://paymentapi.tami.com.tr/hosted/create-one-time-hosted-token"
+TAMI_REDIRECT_URL = "https://portal.tami.com.tr/hostedPaymentPage?token="
 
 # Paneldeki güncel Live bilgiler (77... ve 84...)
 TAMI_MERCHANT_NO = "77019267"
