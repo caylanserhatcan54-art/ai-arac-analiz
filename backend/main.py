@@ -32,7 +32,7 @@ load_dotenv()
 # =========================================================
 APP_ENV = os.getenv("APP_ENV", "prod")
 BASE_URL = os.getenv("BASE_URL", "https://ai-arac-analiz-backend.onrender.com").rstrip("/")
-ALLOWED_ORIGINS = ["https://www.carvix.site", "https://carvix.site", "http://localhost:3000"]
+ALLOWED_ORIGINS = ["*"] # Test aşamasında CORS sorununu kökten çözmek için
 LEMON_SQUEEZY_WEBHOOK_SECRET = os.getenv("LEMON_SQUEEZY_WEBHOOK_SECRET", "")
 TAMI_API_URL = "https://api.tami.com.tr/v1/payment/init"
 TAMI_MERCHANT_NO = "77019267"
@@ -50,7 +50,6 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 FLOWS_PATH = DATA_DIR / "flows.json"
 JOBS_PATH = DATA_DIR / "jobs.json"
 
-# ARAÇ TİPİ YAPILANDIRMASI
 VEHICLE_CONFIGS = {
     "Otomobil": {"base_img": "https://www.carvix.site/car-base.png", "label": "Binek Araç"},
     "Motosiklet": {"base_img": "https://www.carvix.site/moto-base.png", "label": "Motosiklet"},
@@ -114,9 +113,6 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
                 .title-main {{ font-size: 28px; font-weight: bold; color: white; }}
                 .carvix-logo {{ font-size: 24px; font-weight: 900; color: #3b82f6; }}
                 .info-bar {{ background: rgba(255,255,255,0.1); padding: 10px; border-radius: 10px; color: #ccc; font-size: 11px; margin-bottom: 20px; }}
-                .card {{ background: white; border: 1px solid #e5e7eb; border-radius: 15px; padding: 20px; }}
-                .status-badge {{ background: #dcfce7; color: #166534; padding: 5px 12px; border-radius: 20px; font-size: 12px; font-weight: bold; display: inline-block; }}
-                .schema-box {{ text-align: center; margin: 20px 0; }}
                 table {{ width: 100%; border-collapse: collapse; margin-top: 20px; }}
                 th {{ background: #f3f4f6; color: #4b5563; padding: 12px; text-align: left; font-size: 12px; }}
                 .ai-comment-box {{ background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 10px; padding: 15px; margin-top: 20px; font-size: 12px; }}
@@ -127,37 +123,19 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
                 <span class="title-main">Yapay Zeka Özeti</span>
                 <span class="carvix-logo">C CARVIX AI</span>
             </div>
-            
             <div class="info-bar">
-                Rapor No: {flow_token[:12].upper()} | Tarih: {time.strftime('%d.%m.%Y')} | Sistem: Yapay Zeka Analiz
+                Rapor No: {flow_token[:12].upper()} | Tarih: {time.strftime('%d.%m.%Y')}
             </div>
-
             <div class="container">
                 <div style="font-size: 18px; font-weight: bold; margin-bottom: 10px;">ANALİZ ÖZETİ</div>
-                <div class="status-badge">✅ Yapay Onaylı</div>
-                
                 <div style="margin-top: 15px; font-size: 13px; color: #374151;">{ai_comment}</div>
-
-                <div class="schema-box">
+                <div style="text-align: center; margin: 20px 0;">
                     <img src="{config['base_img']}" style="width: 380px;">
-                    <div style="margin-top:10px; font-size:11px;">
-                        <span style="color:#16a34a">● ORİJİNAL</span> &nbsp; <span style="color:#ca8a04">● SOK-TAK</span> &nbsp; <span style="color:#dc2626">● DEĞİŞEN</span>
-                    </div>
                 </div>
-
                 <table>
-                    <thead><tr><th>Parça</th><th>Durum</th><th>Analiz Notları</th></tr></thead>
+                    <thead><tr><th>Parça</th><th>Durum</th><th>Notlar</th></tr></thead>
                     <tbody>{rows_html}</tbody>
                 </table>
-
-                <div class="ai-comment-box">
-                    <strong>Parça Detayları & AI Görüşü:</strong><br/>
-                    <p style="font-style: italic; color: #4b5563;">Bu rapor dijital veriler üzerinden oluşturulmuştur. Fiziksel kontrollerle desteklenmesi önerilir.</p>
-                </div>
-                
-                <div style="text-align: center; margin-top: 20px; font-size: 10px; color: #9ca3af;">
-                    © 2024 Carvix AI Analysis Solutions | carvix.site
-                </div>
             </div>
         </body>
         </html>
@@ -169,7 +147,7 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
         print(f"PDF Error: {e}"); return None
 
 # =========================================================
-# MAİL VE DİĞER FONKSİYONLAR
+# MAİL FONKSİYONU
 # =========================================================
 def send_report_email(customer_email: str, flow_token: str, report_content: Any, vehicle_type: str = "Otomobil"):
     try:
@@ -188,9 +166,11 @@ def send_report_email(customer_email: str, flow_token: str, report_content: Any,
             server.send_message(msg)
         return True
     except Exception as e:
-        print(f"Mail gönderme hatası: {e}")
-        return False
+        print(f"Mail gönderme hatası: {e}"); return False
 
+# =========================================================
+# APP & ENDPOINTS
+# =========================================================
 flows = _load_json(FLOWS_PATH, {})
 jobs = _load_json(JOBS_PATH, {})
 
@@ -203,73 +183,24 @@ async def shopier_callback(request: Request):
     try:
         form_data = await request.form()
         res_data = dict(form_data)
-        
-        print(f"DEBUG: Shopier Callback tetiklendi. Mail: {res_data.get('res_mail')} Status: {res_data.get('res_status')}")
-
         if res_data.get("res_status") == "success":
             customer_email = res_data.get("res_mail")
-            found = False
             for f_token, f_data in flows.items():
                 if f_data.get("email") == customer_email:
                     flows[f_token]["status"] = "paid"
                     _save_json(FLOWS_PATH, flows)
-                    print(f"DEBUG: Ödeme onaylandı, Flow güncellendi: {f_token}")
                     if f_data.get("report"):
                         send_report_email(customer_email, f_token, f_data["report"], f_data.get("vehicle_type", "Otomobil"))
-                    found = True
                     break
-            if not found:
-                print(f"DEBUG: Uyarı - Shopier maili ({customer_email}) sistemde kayıtlı bir flow ile eşleşmedi.")
-        
-        # Kesin çözüm: 200 OK Response nesnesi
-        return Response(content="OK", status_code=200, media_type="text/plain")
+        return Response(content="OK", status_code=200)
     except Exception as e:
-        print(f"DEBUG: Callback Error: {str(e)}")
-        return Response(content="FAILED", status_code=500, media_type="text/plain")
-
-@app.post("/payments/tami/init")
-async def tami_init(request: Request):
-    try:
-        payload = await request.json()
-        flow_token = payload.get("flow_token", "unknown")
-        generated_hash = generate_tami_signature(TAMI_MERCHANT_NO, TAMI_TERMINAL_NO, TAMI_SECRET_KEY)
-        auth_token = f"{TAMI_MERCHANT_NO}:{TAMI_TERMINAL_NO}:{generated_hash}"
-        body_dict = {"amount": 129.90, "orderId": f"TOKEN-{flow_token}", "successCallbackUrl": f"{BASE_URL}/payments/tami/callback", "failCallbackUrl": f"{BASE_URL}/payments/tami/callback", "mobilePhoneNumber": "905000000000"}
-        headers = {"PG-Auth-Token": auth_token, "Content-Type": "application/json"}
-        response = requests.post(TAMI_API_URL, json=body_dict, headers=headers)
-        result = response.json()
-        token = result.get("oneTimeToken")
-        if token: return {"paymentUrl": f"https://portal.tami.com.tr/hostedPaymentPage?token={token}"}
-        return JSONResponse(status_code=400, content={"error": "Token Error"})
-    except Exception as e: return JSONResponse(status_code=500, content={"error": str(e)})
-
-@app.post("/payments/tami/callback")
-async def tami_callback(request: Request):
-    form_data = await request.form()
-    order_id = form_data.get("orderId", "")
-    status = form_data.get("status", "")
-    if status == "SUCCESS" and "TOKEN-" in order_id:
-        flow_token = order_id.replace("TOKEN-", "")
-        if flow_token in flows:
-            flows[flow_token]["status"] = "paid"
-            _save_json(FLOWS_PATH, flows)
-        return RedirectResponse(url=f"https://carvix.site/success?token={flow_token}", status_code=303)
-    return RedirectResponse(url="https://carvix.site/fail", status_code=303)
+        return Response(content="FAILED", status_code=500)
 
 @app.post("/flows")
 async def create_flow(payload: Dict[str, Any] = Body(default={})):
     token = str(uuid.uuid4())
-    flows[token] = {
-        "token": token, 
-        "vehicle_type": payload.get("vehicle_type", "Otomobil"), 
-        "created_at": now_ts(), 
-        "parts": {}, 
-        "status": "collecting", 
-        "report": None, 
-        "email": None
-    }
-    _save_json(FLOWS_PATH, flows)
-    return {"token": token}
+    flows[token] = {"token": token, "vehicle_type": payload.get("vehicle_type", "Otomobil"), "created_at": now_ts(), "parts": {}, "status": "collecting", "report": None, "email": None}
+    _save_json(FLOWS_PATH, flows); return {"token": token}
 
 @app.post("/flows/{flow_token}/upload")
 async def upload_images(flow_token: str, part_key: str = Form(...), files: List[UploadFile] = File(...)):
@@ -280,21 +211,17 @@ async def upload_images(flow_token: str, part_key: str = Form(...), files: List[
         stored = f"{uuid.uuid4()}{safe_ext(f.filename)}"
         (UPLOAD_DIR / stored).write_bytes(await f.read())
         flow["parts"][part_key].append(make_public_upload_url(stored))
-    _save_json(FLOWS_PATH, flows)
-    return {"ok": True}
+    _save_json(FLOWS_PATH, flows); return {"ok": True}
 
 @app.post("/flows/{flow_token}/submit")
 async def submit_flow(flow_token: str, payload: Dict[str, Any] = Body(...)):
     flow = flows.get(flow_token)
     if not flow: raise HTTPException(404)
-    email = payload.get("email")
-    if not email: raise HTTPException(status_code=422, detail="E-posta adresi gerekli")
-    flow["email"] = email
+    flow["email"] = payload.get("email")
     job_id = str(uuid.uuid4())
     jobs[job_id] = {"id": job_id, "flow_token": flow_token, "status": "queued"}
     flow["status"] = "queued"
-    _save_json(JOBS_PATH, jobs)
-    _save_json(FLOWS_PATH, flows)
+    _save_json(JOBS_PATH, jobs); _save_json(FLOWS_PATH, flows)
     return {"ok": True, "job_id": job_id}
 
 @app.get("/jobs/next")
@@ -305,24 +232,29 @@ def get_next_job():
             _save_json(JOBS_PATH, jobs)
             flow = flows.get(j["flow_token"])
             return {"id": jid, "flow_token": j["flow_token"], "vehicle_type": flow.get("vehicle_type", "Otomobil"), "images": flow["parts"]}
-    
-    # 204 No Content için kesin çözüm: İçeriksiz Response
     return Response(status_code=204)
 
 @app.post("/jobs/{job_id}/result")
 def submit_job_result(job_id: str, payload: Dict[str, Any]):
     j = jobs.get(job_id)
     if not j: return {"error": "Job not found"}
-    j["status"] = "done"
-    j["result"] = payload
+    j["status"] = "done"; j["result"] = payload
     flow = flows.get(j["flow_token"])
     if flow:
-        flow["status"] = "done"
-        flow["report"] = payload
+        flow["status"] = "done"; flow["report"] = payload
         _save_json(FLOWS_PATH, flows)
         if flow.get("email"):
             send_report_email(flow["email"], j["flow_token"], payload, flow.get("vehicle_type", "Otomobil"))
-    _save_json(JOBS_PATH, jobs)
+    _save_json(JOBS_PATH, jobs); return {"ok": True}
+
+# KRİTİK EKLENTİ: AI HATA ALIRSA BURAYA GELECEK
+@app.post("/jobs/{job_id}/failed")
+def job_failed(job_id: str, payload: Dict[str, Any] = Body(...)):
+    print(f"DEBUG: AI Hatası - Job ID: {job_id} - Sebep: {payload.get('error')}")
+    j = jobs.get(job_id)
+    if j:
+        j["status"] = "error"; j["error_details"] = payload.get("error")
+        _save_json(JOBS_PATH, jobs)
     return {"ok": True}
 
 @app.get("/reports/{flow_token}")
