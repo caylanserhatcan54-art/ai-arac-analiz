@@ -204,7 +204,6 @@ async def shopier_callback(request: Request):
         form_data = await request.form()
         res_data = dict(form_data)
         
-        # LOG: Gelen veriyi Render loglarında görmek için
         print(f"DEBUG: Shopier Callback tetiklendi. Mail: {res_data.get('res_mail')} Status: {res_data.get('res_status')}")
 
         if res_data.get("res_status") == "success":
@@ -222,11 +221,11 @@ async def shopier_callback(request: Request):
             if not found:
                 print(f"DEBUG: Uyarı - Shopier maili ({customer_email}) sistemde kayıtlı bir flow ile eşleşmedi.")
         
-        # RuntimeError: Response content longer than Content-Length hatasını bu Response tipi çözer.
-        return Response(content="OK", media_type="text/plain")
+        # Kesin çözüm: 200 OK Response nesnesi
+        return Response(content="OK", status_code=200, media_type="text/plain")
     except Exception as e:
         print(f"DEBUG: Callback Error: {str(e)}")
-        return Response(content="FAILED", media_type="text/plain", status_code=500)
+        return Response(content="FAILED", status_code=500, media_type="text/plain")
 
 @app.post("/payments/tami/init")
 async def tami_init(request: Request):
@@ -306,7 +305,9 @@ def get_next_job():
             _save_json(JOBS_PATH, jobs)
             flow = flows.get(j["flow_token"])
             return {"id": jid, "flow_token": j["flow_token"], "vehicle_type": flow.get("vehicle_type", "Otomobil"), "images": flow["parts"]}
-    return JSONResponse({"id": None}, status_code=204)
+    
+    # 204 No Content için kesin çözüm: İçeriksiz Response
+    return Response(status_code=204)
 
 @app.post("/jobs/{job_id}/result")
 def submit_job_result(job_id: str, payload: Dict[str, Any]):
