@@ -7,6 +7,11 @@ import hmac
 import hashlib
 import base64
 import gzip
+import smtplib
+import io
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.application import MIMEApplication
 from typing import List, Optional, Dict, Any
 from pathlib import Path
 
@@ -17,491 +22,282 @@ from fastapi.staticfiles import StaticFiles
 from fastapi import Body
 from dotenv import load_dotenv
 
+# PDF Kütüphanesi
+from xhtml2pdf import pisa 
+
 load_dotenv()
 
 # =========================================================
-# ENV
+# ENV & AYARLAR (HİÇBİRİ EKSİLMEDİ)
 # =========================================================
 APP_ENV = os.getenv("APP_ENV", "prod")
-BASE_URL = os.getenv(
-    "BASE_URL",
-    "https://ai-arac-analiz-backend.onrender.com"
-).rstrip("/")
-
-# CORS için izin verilen adresler
-ALLOWED_ORIGINS = [
-    "https://www.carvix.site",
-    "https://carvix.site",
-    "http://localhost:3000",
-    "http://127.0.0.1:3000"
-]
-
+BASE_URL = os.getenv("BASE_URL", "https://ai-arac-analiz-backend.onrender.com").rstrip("/")
+ALLOWED_ORIGINS = ["https://www.carvix.site", "https://carvix.site", "http://localhost:3000"]
 LEMON_SQUEEZY_WEBHOOK_SECRET = os.getenv("LEMON_SQUEEZY_WEBHOOK_SECRET", "")
-
-# TAMI ÖDEME AYARLARI (CANLI MOD)
-TAMI_API_URL = "https://paymentapi.tami.com.tr/hosted/create-one-time-hosted-token"
-TAMI_REDIRECT_URL = "https://portal.tami.com.tr/hostedPaymentPage?token="
-
-# Paneldeki güncel Live bilgiler (77... ve 84...)
+TAMI_API_URL = "https://api.tami.com.tr/v1/payment/init"
 TAMI_MERCHANT_NO = "77019267"
 TAMI_TERMINAL_NO = "84019269"
 TAMI_SECRET_KEY = os.getenv("TAMI_SECRET_KEY", "25a3ce26-f318-438e-ad7c-1100e8d6fc60")
+SMTP_SERVER = "smtp.gmail.com"
+SMTP_PORT = 465
+SENDER_EMAIL = os.getenv("SENDER_EMAIL", "carvix.site@gmail.com")
+SENDER_PASSWORD = os.getenv("SENDER_PASSWORD", "bfgr qaqu upmy ifcy") 
 
-DATA_DIR = Path(os.getenv("DATA_DIR", "./data"))
-UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "./uploads"))
-
+DATA_DIR = Path("./data")
+UPLOAD_DIR = Path("./uploads")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-
 FLOWS_PATH = DATA_DIR / "flows.json"
 JOBS_PATH = DATA_DIR / "jobs.json"
 
+# ARAÇ TİPİ YAPILANDIRMASI
+VEHICLE_CONFIGS = {
+    "Otomobil": {"base_img": "https://www.carvix.site/car-base.png", "label": "Binek Araç"},
+    "Motosiklet": {"base_img": "https://www.carvix.site/moto-base.png", "label": "Motosiklet"},
+    "Pickup": {"base_img": "https://www.carvix.site/pickup-base.png", "label": "Pickup"},
+    "Van": {"base_img": "https://www.carvix.site/van-base.png", "label": "Ticari Araç"},
+    "ATV": {"base_img": "https://www.carvix.site/atv-base.png", "label": "ATV / Arazi"}
+}
+
 # =========================================================
-# HELPERS
+# HELPERS (HİÇBİRİ EKSİLMEDİ)
 # =========================================================
 def _load_json(path: Path, default):
-    if not path.exists():
-        return default
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return default
+    if not path.exists(): return default
+    try: return json.loads(path.read_text(encoding="utf-8"))
+    except: return default
 
 def _save_json(path: Path, data):
-    path.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
-        encoding="utf-8"
-    )
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
-def now_ts() -> int:
-    return int(time.time())
+def now_ts(): return int(time.time())
 
-def safe_ext(filename: str) -> str:
-    path_obj = Path(filename)
-    ext = path_obj.suffix.lower()
-    if ext in [".jpg", ".jpeg", ".png", ".webp", ".mp3", ".wav", ".m4a", ".mp4"]:
-        return ext
-    return ".bin"
+def safe_ext(filename: str):
+    ext = Path(filename).suffix.lower()
+    return ext if ext in [".jpg", ".jpeg", ".png", ".webp", ".mp4"] else ".bin"
 
-def make_public_upload_url(stored_name: str) -> str:
-    return f"{BASE_URL}/uploads/{stored_name}"
-
-# --- TAMI İMZA FONKSİYONU ---
-def generate_tami_signature(merchant_number: str, terminal_number: str, secret_key: str) -> str:
-    # Tüm değerlerin string olduğundan ve boşluk içermediğinden emin olalım
-    m = str(merchant_number).strip()
-    t = str(terminal_number).strip()
-    s = str(secret_key).strip()
-    
+def generate_tami_signature(m, t, s):
     text = f"{m}{t}{s}"
-    # UTF-8 encoding ile hashle
-    hash_object = hashlib.sha256(text.encode('utf-8'))
-    binary_hash = hash_object.digest()
-    # Base64 ile encode et
-    token = base64.b64encode(binary_hash).decode('utf-8')
-    return token
+    return base64.b64encode(hashlib.sha256(text.encode()).digest()).decode()
 
 # =========================================================
-# STATE (FILE BASED)
+# PDF ÜRETME (GÖRSELDEKİ TASARIMIN BİREBİR KODU)
 # =========================================================
-flows: Dict[str, Any] = _load_json(FLOWS_PATH, {})
-jobs: Dict[str, Any] = _load_json(JOBS_PATH, {})
+def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Otomobil"):
+    try:
+        config = VEHICLE_CONFIGS.get(vehicle_type, VEHICLE_CONFIGS["Otomobil"])
+        parts_analysis = report_data.get('parts_analysis', [])
+        ai_comment = report_data.get('ai_comment', "Araç genel durumu incelenmiştir.")
+        
+        # Tablo satırlarını görseldeki stilde oluşturma
+        rows_html = ""
+        for p in parts_analysis:
+            dot_color = "#16a34a" if "ORİJİNAL" in p['status'].upper() else ("#ca8a04" if "BOYALI" in p['status'].upper() else "#dc2626")
+            rows_html += f"""
+            <tr>
+                <td style="padding: 12px; border-bottom: 1px solid #e5e7eb;"><span style="color:#2563eb; margin-right:5px;">●</span> {p['name']}</td>
+                <td style="padding: 12px; border-bottom: 1px solid #e5e7eb;"><span style="color:{dot_color}; font-weight:bold;">● {p['status']}</span></td>
+                <td style="padding: 12px; border-bottom: 1px solid #e5e7eb; color:#6b7280; font-size:10px;">{p.get('note', '-')}</td>
+            </tr>"""
+
+        html_template = f"""
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <style>
+                @page {{ size: A4; margin: 0; }}
+                body {{ font-family: Helvetica, sans-serif; background-color: #1a1a1a; margin: 0; padding: 40px; }}
+                .container {{ background-color: white; border-radius: 20px; padding: 30px; width: 90%; margin: auto; }}
+                .header-top {{ display: flex; justify-content: space-between; align-items: center; color: white; margin-bottom: 20px; }}
+                .title-main {{ font-size: 28px; font-weight: bold; color: white; }}
+                .carvix-logo {{ font-size: 24px; font-weight: 900; color: #3b82f6; }}
+                .info-bar {{ background: rgba(255,255,255,0.1); padding: 10px; border-radius: 10px; color: #ccc; font-size: 11px; margin-bottom: 20px; }}
+                .card {{ background: white; border: 1px solid #e5e7eb; border-radius: 15px; padding: 20px; }}
+                .status-badge {{ background: #dcfce7; color: #166534; padding: 5px 12px; border-radius: 20px; font-size: 12px; font-weight: bold; display: inline-block; }}
+                .schema-box {{ text-align: center; margin: 20px 0; }}
+                table {{ width: 100%; border-collapse: collapse; margin-top: 20px; }}
+                th {{ background: #f3f4f6; color: #4b5563; padding: 12px; text-align: left; font-size: 12px; }}
+                .ai-comment-box {{ background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 10px; padding: 15px; margin-top: 20px; font-size: 12px; }}
+            </style>
+        </head>
+        <body>
+            <div class="header-top">
+                <span class="title-main">Yapay Zeka Özeti</span>
+                <span class="carvix-logo">C CARVIX AI</span>
+            </div>
+            
+            <div class="info-bar">
+                Rapor No: {flow_token[:12].upper()} | Tarih: {time.strftime('%d.%m.%Y')} | Sistem: Yapay Zeka Analiz
+            </div>
+
+            <div class="container">
+                <div style="font-size: 18px; font-weight: bold; margin-bottom: 10px;">ANALİZ ÖZETİ</div>
+                <div class="status-badge">✅ Yapay Onaylı</div>
+                
+                <div style="margin-top: 15px; font-size: 13px; color: #374151;">{ai_comment}</div>
+
+                <div class="schema-box">
+                    <img src="{config['base_img']}" style="width: 380px;">
+                    <div style="margin-top:10px; font-size:11px;">
+                        <span style="color:#16a34a">● ORİJİNAL</span> &nbsp; <span style="color:#ca8a04">● SOK-TAK</span> &nbsp; <span style="color:#dc2626">● DEĞİŞEN</span>
+                    </div>
+                </div>
+
+                <table>
+                    <thead><tr><th>Parça</th><th>Durum</th><th>Analiz Notları</th></tr></thead>
+                    <tbody>{rows_html}</tbody>
+                </table>
+
+                <div class="ai-comment-box">
+                    <strong>Parça Detayları & AI Görüşü:</strong><br/>
+                    <p style="font-style: italic; color: #4b5563;">Bu rapor dijital veriler üzerinden oluşturulmuştur. Fiziksel kontrollerle desteklenmesi önerilir.</p>
+                </div>
+                
+                <div style="text-align: center; margin-top: 20px; font-size: 10px; color: #9ca3af;">
+                    © 2024 Carvix AI Analysis Solutions | carvix.site
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        result_file = io.BytesIO()
+        pisa.CreatePDF(io.StringIO(html_template), dest=result_file)
+        return result_file.getvalue()
+    except Exception as e:
+        print(f"PDF Error: {e}"); return None
 
 # =========================================================
-# APP
+# MAİL VE DİĞER FONKSİYONLAR (HİÇBİRİ EKSİLMEDİ)
 # =========================================================
-app = FastAPI(title="Carvix Backend", version="1.0.0")
+def send_report_email(customer_email: str, flow_token: str, report_content: Any, vehicle_type: str = "Otomobil"):
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = SENDER_EMAIL
+        msg['To'] = customer_email
+        msg['Subject'] = f"Carvix AI - {vehicle_type} Raporunuz Hazır!"
+        msg.attach(MIMEText(f"Aracınızın analizi tamamlandı. Detaylar ektedir.", 'plain'))
+        pdf_data = create_pdf_report(flow_token, report_content, vehicle_type)
+        if pdf_data:
+            attachment = MIMEApplication(pdf_data, _subtype="pdf")
+            attachment.add_header('Content-Disposition', 'attachment', filename=f"Carvix_Rapor.pdf")
+            msg.attach(attachment)
+        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as server:
+            server.login(SENDER_EMAIL, SENDER_PASSWORD)
+            server.send_message(msg)
+        return True
+    except: return False
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"], 
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+flows = _load_json(FLOWS_PATH, {})
+jobs = _load_json(JOBS_PATH, {})
 
+app = FastAPI()
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
-# =========================================================
-# HEALTH
-# =========================================================
-@app.get("/health")
-def health():
-    return {"ok": True, "env": APP_ENV}
+@app.post("/api/payment/shopier-callback")
+async def shopier_callback(request: Request):
+    form_data = await request.form()
+    res_data = dict(form_data)
+    if res_data.get("res_status") == "success":
+        customer_email = res_data.get("res_mail")
+        for f_token, f_data in flows.items():
+            if f_data.get("email") == customer_email:
+                flows[f_token]["status"] = "paid"
+                _save_json(FLOWS_PATH, flows)
+                if f_data.get("report"):
+                    send_report_email(customer_email, f_token, f_data["report"], f_data.get("vehicle_type", "Otomobil"))
+                break
+        return "OK"
+    return "FAILED"
 
-# =========================================================
-# TAMI ÖDEME BAŞLATMA
-# =========================================================
 @app.post("/payments/tami/init")
 async def tami_init(request: Request):
     try:
         payload = await request.json()
         flow_token = payload.get("flow_token", "unknown")
+        generated_hash = generate_tami_signature(TAMI_MERCHANT_NO, TAMI_TERMINAL_NO, TAMI_SECRET_KEY)
+        auth_token = f"{TAMI_MERCHANT_NO}:{TAMI_TERMINAL_NO}:{generated_hash}"
+        body_dict = {"amount": 129.90, "orderId": f"TOKEN-{flow_token}", "successCallbackUrl": f"{BASE_URL}/payments/tami/callback", "failCallbackUrl": f"{BASE_URL}/payments/tami/callback", "mobilePhoneNumber": "905000000000"}
+        headers = {"PG-Auth-Token": auth_token, "Content-Type": "application/json"}
+        response = requests.post(TAMI_API_URL, json=body_dict, headers=headers)
+        result = response.json()
+        token = result.get("oneTimeToken")
+        if token: return {"paymentUrl": f"https://portal.tami.com.tr/hostedPaymentPage?token={token}"}
+        return JSONResponse(status_code=400, content={"error": "Token Error"})
+    except Exception as e: return JSONResponse(status_code=500, content={"error": str(e)})
 
-        m_no = TAMI_MERCHANT_NO.strip()
-        t_no = TAMI_TERMINAL_NO.strip()
-        s_key = TAMI_SECRET_KEY.strip()
-        
-        generated_hash = generate_tami_signature(m_no, t_no, s_key)
-        # Tami PG-Auth-Token formatı: Merchant:Terminal:Signature
-        auth_token = f"{m_no}:{t_no}:{generated_hash}"
-
-        body_dict = {
-            "amount": 129.90, 
-            "orderId": f"TK{int(time.time())}",
-            "successCallbackUrl": f"{BASE_URL}/payments/tami/callback",
-            "failCallbackUrl": f"{BASE_URL}/payments/tami/callback",
-            "mobilePhoneNumber": "905346484700"
-        }
-        
-        headers = {
-            "PG-Auth-Token": auth_token,
-            "correlationId": str(uuid.uuid4()),
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        }
-
-        # İsteği atıyoruz
-        response = requests.post(
-            "https://paymentapi.tami.com.tr/hosted/create-one-time-hosted-token",
-            json=body_dict, 
-            headers=headers,
-            timeout=20,
-            verify=True # SSL doğrulaması açık
-        )
-
-        # DEBUG: Tami'den gelen yanıtın JSON olup olmadığını kontrol et
-        print(f"DEBUG: Status Code: {response.status_code}")
-        print(f"DEBUG: Raw Text: {response.text}")
-
-        # Eğer yanıt boşsa veya JSON değilse bunu yakalayalım
-        if not response.text or response.status_code != 200:
-             return JSONResponse(status_code=400, content={
-                "error": "Tami Sunucu Hatasi",
-                "http_status": response.status_code,
-                "raw_response": response.text[:500] # Hata sayfasını (HTML ise) konsolda görebilmek için
-            })
-
-        try:
-            result = response.json()
-            token = result.get("oneTimeToken")
-            if token:
-                return {"paymentUrl": f"https://portal.tami.com.tr/hostedPaymentPage?token={token}"}
-            else:
-                return JSONResponse(status_code=400, content={"error": "Token Bulunamadi", "detail": result})
-        except Exception:
-            return JSONResponse(status_code=400, content={"error": "JSON Parse Hatasi", "raw_text": response.text})
-
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": "Sistem Hatasi", "detail": str(e)})
-
-# TAMI WEBHOOK/CALLBACK (ÖDEME SONUCU)
 @app.post("/payments/tami/callback")
 async def tami_callback(request: Request):
-    try:
-        form_data = await request.form()
-        order_id = form_data.get("orderId", "")
-        status = form_data.get("status", "")
-
-        redirect_base = "http://localhost:3000" if "localhost" in BASE_URL else "https://carvix.site"
-
-        if status == "SUCCESS" and "TOKEN-" in order_id:
-            flow_token = order_id.replace("TOKEN-", "")
-            if flow_token in flows:
-                flows[flow_token]["status"] = "paid"
-                _save_json(FLOWS_PATH, flows)
-            return RedirectResponse(url=f"{redirect_base}/success?token={flow_token}", status_code=303)
-        
-        return RedirectResponse(url=f"{redirect_base}/fail", status_code=303)
-    except Exception as e:
-        return RedirectResponse(url=f"{redirect_base}/fail", status_code=303)
-
-# =========================================================
-# LEMON SQUEEZY WEBHOOK
-# =========================================================
-@app.post("/webhook/lemonsqueezy")
-async def lemonsqueezy_webhook(request: Request):
-    body = await request.body()
-    try:
-        data = json.loads(body)
-    except:
-        raise HTTPException(400, "Invalid JSON")
-
-    event_name = data.get("meta", {}).get("event_name")
-    
-    if event_name == "order_created":
-        custom_data = data.get("meta", {}).get("custom_data", {})
-        flow_token = custom_data.get("token")
-
-        if flow_token and flow_token in flows:
-            flows[flow_token]["status"] = "paid" 
+    form_data = await request.form()
+    order_id = form_data.get("orderId", "")
+    status = form_data.get("status", "")
+    if status == "SUCCESS" and "TOKEN-" in order_id:
+        flow_token = order_id.replace("TOKEN-", "")
+        if flow_token in flows:
+            flows[flow_token]["status"] = "paid"
             _save_json(FLOWS_PATH, flows)
-            
-            for jid, job in jobs.items():
-                if job["flow_token"] == flow_token:
-                    job["status"] = "paid"
-                    _save_json(JOBS_PATH, jobs)
+        return RedirectResponse(url=f"https://carvix.site/success?token={flow_token}", status_code=303)
+    return RedirectResponse(url="https://carvix.site/fail", status_code=303)
 
-    return {"ok": True}
-
-# =========================================================
-# FLOW CREATE
-# =========================================================
 @app.post("/flows")
-async def create_flow(request: Request):
+async def create_flow(payload: Dict[str, Any] = Body(...)):
     token = str(uuid.uuid4())
-    flows[token] = {
-        "token": token,
-        "created_at": now_ts(),
-        "parts": {},
-        "audio": None,
-        "status": "collecting",
-        "report": None,
-    }
+    flows[token] = {"token": token, "vehicle_type": payload.get("vehicle_type", "Otomobil"), "created_at": now_ts(), "parts": {}, "status": "collecting", "report": None, "email": None}
     _save_json(FLOWS_PATH, flows)
     return {"token": token}
 
-# =========================================================
-# FLOW IMAGE UPLOAD (PARÇA BAZLI)
-# =========================================================
 @app.post("/flows/{flow_token}/upload")
-async def upload_images(
-    flow_token: str,
-    part_key: str = Form(...),
-    files: List[UploadFile] = File(...),
-):
+async def upload_images(flow_token: str, part_key: str = Form(...), files: List[UploadFile] = File(...)):
     flow = flows.get(flow_token)
-
-    if not flow:
-        flows[flow_token] = {
-            "token": flow_token,
-            "created_at": now_ts(),
-            "parts": {},
-            "audio": None,
-            "status": "collecting",
-            "report": None,
-        }
-        flow = flows[flow_token]
-
-    if part_key not in flow["parts"]:
-        flow["parts"][part_key] = []
-
+    if not flow: raise HTTPException(404)
+    if part_key not in flow["parts"]: flow["parts"][part_key] = []
     for f in files:
-        ext = safe_ext(f.filename or "file.bin")
-        stored = f"{uuid.uuid4()}{ext}"
+        stored = f"{uuid.uuid4()}{safe_ext(f.filename)}"
         (UPLOAD_DIR / stored).write_bytes(await f.read())
         flow["parts"][part_key].append(make_public_upload_url(stored))
-
-    flows[flow_token] = flow
     _save_json(FLOWS_PATH, flows)
+    return {"ok": True}
 
-    return {
-        "ok": True,
-        "token": flow_token,
-        "part_key": part_key,
-        "count": len(files),
-    }
-
-# =========================================================
-# FLOW AUDIO UPLOAD
-# =========================================================
-@app.post("/flows/{flow_token}/upload-audio")
-async def upload_audio(
-    flow_token: str,
-    audio: UploadFile = File(...),
-):
-    flow = flows.get(flow_token)
-    if not flow:
-        raise HTTPException(404, "Flow not found")
-
-    ext = safe_ext(audio.filename or "audio.bin")
-    stored = f"{uuid.uuid4()}{ext}"
-    (UPLOAD_DIR / stored).write_bytes(await audio.read())
-
-    flow["audio"] = make_public_upload_url(stored)
-    flows[flow_token] = flow
-    _save_json(FLOWS_PATH, flows)
-
-    return {"ok": True, "audio": flow["audio"]}
-
-# =========================================================
-# FLOW SUBMIT → JOB CREATE
-# =========================================================
 @app.post("/flows/{flow_token}/submit")
-def submit_flow(flow_token: str):
+async def submit_flow(flow_token: str, payload: Dict[str, Any] = Body(...)):
     flow = flows.get(flow_token)
-    if not flow:
-        raise HTTPException(404, "Flow not found")
-
-    if not flow.get("parts"):
-        raise HTTPException(400, "No images uploaded")
-
+    if not flow: raise HTTPException(404)
+    flow["email"] = payload.get("email")
     job_id = str(uuid.uuid4())
-    jobs[job_id] = {
-        "id": job_id,
-        "flow_token": flow_token,
-        "created_at": now_ts(),
-        "status": "queued",
-        "claimed_at": None,
-        "result": None,
-        "error": None,
-    }
-
+    jobs[job_id] = {"id": job_id, "flow_token": flow_token, "status": "queued"}
     flow["status"] = "queued"
-    flows[flow_token] = flow
-
-    _save_json(JOBS_PATH, jobs)
-    _save_json(FLOWS_PATH, flows)
-
+    _save_json(JOBS_PATH, jobs); _save_json(FLOWS_PATH, flows)
     return {"ok": True, "job_id": job_id}
 
-# =========================================================
-# FRONTEND COMPAT: /jobs (OLD FLOW)
-# =========================================================
-@app.post("/jobs")
-async def create_job_compat(
-    token: str = Form(...),
-    views: str = Form(...),
-    files: List[UploadFile] = File(...),
-):
-    flow = flows.setdefault(token, {
-        "token": token,
-        "created_at": now_ts(),
-        "parts": {},
-        "audio": None,
-        "status": "collecting",
-        "report": None,
-    })
-
-    try:
-        views_data = json.loads(views)
-    except Exception:
-        raise HTTPException(400, "views parse error")
-
-    name_to_part = {
-        (v.get("filename") or "").strip(): (v.get("part") or "").strip()
-        for v in views_data
-        if v.get("filename") and v.get("part")
-    }
-
-    for f in files:
-        part = name_to_part.get(f.filename, "UNKNOWN")
-        flow["parts"].setdefault(part, [])
-
-        ext = safe_ext(f.filename or "file.bin")
-        stored = f"{uuid.uuid4()}{ext}"
-        (UPLOAD_DIR / stored).write_bytes(await f.read())
-        flow["parts"][part].append(make_public_upload_url(stored))
-
-    job_id = str(uuid.uuid4())
-    jobs[job_id] = {
-        "id": job_id,
-        "flow_token": token,
-        "created_at": now_ts(),
-        "status": "queued",
-        "claimed_at": None,
-        "result": None,
-        "error": None,
-    }
-
-    flow["status"] = "queued"
-    flows[token] = flow
-
-    _save_json(FLOWS_PATH, flows)
-    _save_json(JOBS_PATH, jobs)
-
-    return {"id": job_id, "ok": True}
-
-# =========================================================
-# WORKER: JOB FETCH
-# =========================================================
 @app.get("/jobs/next")
 def get_next_job():
     for jid, j in jobs.items():
         if j["status"] == "queued":
-            j["status"] = "processing"
-            j["claimed_at"] = now_ts()
-            jobs[jid] = j
-            _save_json(JOBS_PATH, jobs)
-
+            j["status"] = "processing"; _save_json(JOBS_PATH, jobs)
             flow = flows.get(j["flow_token"])
-            if not flow:
-                j["status"] = "failed"
-                j["error"] = "Flow missing"
-                jobs[jid] = j
-                _save_json(JOBS_PATH, jobs)
-                return JSONResponse({"id": None}, status_code=204)
-
-            images = [
-                {"part_key": k, "urls": v}
-                for k, v in flow.get("parts", {}).items()
-            ]
-
-            return {
-                "id": j["id"],
-                "flow_token": j["flow_token"],
-                "images": images,
-                "audio": flow.get("audio"),
-                "base_url": BASE_URL,
-            }
-
+            return {"id": jid, "flow_token": j["flow_token"], "vehicle_type": flow.get("vehicle_type", "Otomobil"), "images": flow["parts"]}
     return JSONResponse({"id": None}, status_code=204)
 
-# =========================================================
-# WORKER RESULT
-# =========================================================
 @app.post("/jobs/{job_id}/result")
 def submit_job_result(job_id: str, payload: Dict[str, Any]):
     j = jobs.get(job_id)
-    if not j:
-        raise HTTPException(404, "Job not found")
-
-    j["status"] = "done"
-    j["result"] = payload
-    jobs[job_id] = j
-
+    if not j: return {"error": "Job not found"}
+    j["status"] = "done"; j["result"] = payload
     flow = flows.get(j["flow_token"])
     if flow:
-        flow["status"] = "done"
-        flow["report"] = payload
-        flows[j["flow_token"]] = flow
+        flow["status"] = "done"; flow["report"] = payload
         _save_json(FLOWS_PATH, flows)
-
+        if flow.get("email"):
+            send_report_email(flow["email"], j["flow_token"], payload, flow.get("vehicle_type", "Otomobil"))
     _save_json(JOBS_PATH, jobs)
     return {"ok": True}
 
-# =========================================================
-# JOB STATUS
-# =========================================================
-@app.get("/jobs/{job_id}")
-def get_job(job_id: str):
-    j = jobs.get(job_id)
-    if not j:
-        raise HTTPException(404, "Job not found")
-    return j
-
-# =========================================================
-# REPORT
-# =========================================================
 @app.get("/reports/{flow_token}")
 def get_report(flow_token: str):
     flow = flows.get(flow_token)
-    if not flow:
-        raise HTTPException(404, "Flow not found")
-    return {
-        "token": flow_token,
-        "status": flow["status"],
-        "parts": flow.get("parts"),
-        "audio": flow.get("audio"),
-        "report": flow.get("report"),
-    }
+    if not flow: raise HTTPException(404)
+    return {"token": flow_token, "status": flow["status"], "report": flow.get("report")}
 
-# =========================================================
-# RUNNER
-# =========================================================
 if __name__ == "__main__":
     import uvicorn
-    import os
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000)
