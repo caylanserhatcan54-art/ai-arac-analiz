@@ -17,7 +17,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi import Body
 from dotenv import load_dotenv
@@ -81,7 +81,6 @@ def generate_tami_signature(m, t, s):
     return base64.b64encode(hashlib.sha256(text.encode()).digest()).decode()
 
 def make_public_upload_url(filename: str):
-    """Yüklenen dosyalar için tam URL oluşturur"""
     return f"{BASE_URL}/uploads/{filename}"
 
 # =========================================================
@@ -201,19 +200,33 @@ app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
 @app.post("/api/payment/shopier-callback")
 async def shopier_callback(request: Request):
-    form_data = await request.form()
-    res_data = dict(form_data)
-    if res_data.get("res_status") == "success":
-        customer_email = res_data.get("res_mail")
-        for f_token, f_data in flows.items():
-            if f_data.get("email") == customer_email:
-                flows[f_token]["status"] = "paid"
-                _save_json(FLOWS_PATH, flows)
-                if f_data.get("report"):
-                    send_report_email(customer_email, f_token, f_data["report"], f_data.get("vehicle_type", "Otomobil"))
-                break
-        return "OK"
-    return "FAILED"
+    try:
+        form_data = await request.form()
+        res_data = dict(form_data)
+        
+        # LOG: Gelen veriyi Render loglarında görmek için
+        print(f"DEBUG: Shopier Callback tetiklendi. Mail: {res_data.get('res_mail')} Status: {res_data.get('res_status')}")
+
+        if res_data.get("res_status") == "success":
+            customer_email = res_data.get("res_mail")
+            found = False
+            for f_token, f_data in flows.items():
+                if f_data.get("email") == customer_email:
+                    flows[f_token]["status"] = "paid"
+                    _save_json(FLOWS_PATH, flows)
+                    print(f"DEBUG: Ödeme onaylandı, Flow güncellendi: {f_token}")
+                    if f_data.get("report"):
+                        send_report_email(customer_email, f_token, f_data["report"], f_data.get("vehicle_type", "Otomobil"))
+                    found = True
+                    break
+            if not found:
+                print(f"DEBUG: Uyarı - Shopier maili ({customer_email}) sistemde kayıtlı bir flow ile eşleşmedi.")
+        
+        # RuntimeError: Response content longer than Content-Length hatasını bu Response tipi çözer.
+        return Response(content="OK", media_type="text/plain")
+    except Exception as e:
+        print(f"DEBUG: Callback Error: {str(e)}")
+        return Response(content="FAILED", media_type="text/plain", status_code=500)
 
 @app.post("/payments/tami/init")
 async def tami_init(request: Request):
@@ -275,11 +288,8 @@ async def upload_images(flow_token: str, part_key: str = Form(...), files: List[
 async def submit_flow(flow_token: str, payload: Dict[str, Any] = Body(...)):
     flow = flows.get(flow_token)
     if not flow: raise HTTPException(404)
-    
     email = payload.get("email")
-    if not email:
-        raise HTTPException(status_code=422, detail="E-posta adresi gerekli")
-        
+    if not email: raise HTTPException(status_code=422, detail="E-posta adresi gerekli")
     flow["email"] = email
     job_id = str(uuid.uuid4())
     jobs[job_id] = {"id": job_id, "flow_token": flow_token, "status": "queued"}
