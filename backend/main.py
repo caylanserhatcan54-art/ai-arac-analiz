@@ -28,7 +28,7 @@ from xhtml2pdf import pisa
 load_dotenv()
 
 # =========================================================
-# ENV & AYARLAR (HİÇBİRİ EKSİLMEDİ)
+# ENV & AYARLAR
 # =========================================================
 APP_ENV = os.getenv("APP_ENV", "prod")
 BASE_URL = os.getenv("BASE_URL", "https://ai-arac-analiz-backend.onrender.com").rstrip("/")
@@ -60,7 +60,7 @@ VEHICLE_CONFIGS = {
 }
 
 # =========================================================
-# HELPERS (HİÇBİRİ EKSİLMEDİ)
+# HELPERS
 # =========================================================
 def _load_json(path: Path, default):
     if not path.exists(): return default
@@ -80,8 +80,12 @@ def generate_tami_signature(m, t, s):
     text = f"{m}{t}{s}"
     return base64.b64encode(hashlib.sha256(text.encode()).digest()).decode()
 
+def make_public_upload_url(filename: str):
+    """Yüklenen dosyalar için tam URL oluşturur"""
+    return f"{BASE_URL}/uploads/{filename}"
+
 # =========================================================
-# PDF ÜRETME (GÖRSELDEKİ TASARIMIN BİREBİR KODU)
+# PDF ÜRETME
 # =========================================================
 def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Otomobil"):
     try:
@@ -89,7 +93,6 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
         parts_analysis = report_data.get('parts_analysis', [])
         ai_comment = report_data.get('ai_comment', "Araç genel durumu incelenmiştir.")
         
-        # Tablo satırlarını görseldeki stilde oluşturma
         rows_html = ""
         for p in parts_analysis:
             dot_color = "#16a34a" if "ORİJİNAL" in p['status'].upper() else ("#ca8a04" if "BOYALI" in p['status'].upper() else "#dc2626")
@@ -167,7 +170,7 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
         print(f"PDF Error: {e}"); return None
 
 # =========================================================
-# MAİL VE DİĞER FONKSİYONLAR (HİÇBİRİ EKSİLMEDİ)
+# MAİL VE DİĞER FONKSİYONLAR
 # =========================================================
 def send_report_email(customer_email: str, flow_token: str, report_content: Any, vehicle_type: str = "Otomobil"):
     try:
@@ -185,7 +188,9 @@ def send_report_email(customer_email: str, flow_token: str, report_content: Any,
             server.login(SENDER_EMAIL, SENDER_PASSWORD)
             server.send_message(msg)
         return True
-    except: return False
+    except Exception as e:
+        print(f"Mail gönderme hatası: {e}")
+        return False
 
 flows = _load_json(FLOWS_PATH, {})
 jobs = _load_json(JOBS_PATH, {})
@@ -240,9 +245,17 @@ async def tami_callback(request: Request):
     return RedirectResponse(url="https://carvix.site/fail", status_code=303)
 
 @app.post("/flows")
-async def create_flow(payload: Dict[str, Any] = Body(...)):
+async def create_flow(payload: Dict[str, Any] = Body(default={})):
     token = str(uuid.uuid4())
-    flows[token] = {"token": token, "vehicle_type": payload.get("vehicle_type", "Otomobil"), "created_at": now_ts(), "parts": {}, "status": "collecting", "report": None, "email": None}
+    flows[token] = {
+        "token": token, 
+        "vehicle_type": payload.get("vehicle_type", "Otomobil"), 
+        "created_at": now_ts(), 
+        "parts": {}, 
+        "status": "collecting", 
+        "report": None, 
+        "email": None
+    }
     _save_json(FLOWS_PATH, flows)
     return {"token": token}
 
@@ -262,18 +275,25 @@ async def upload_images(flow_token: str, part_key: str = Form(...), files: List[
 async def submit_flow(flow_token: str, payload: Dict[str, Any] = Body(...)):
     flow = flows.get(flow_token)
     if not flow: raise HTTPException(404)
-    flow["email"] = payload.get("email")
+    
+    email = payload.get("email")
+    if not email:
+        raise HTTPException(status_code=422, detail="E-posta adresi gerekli")
+        
+    flow["email"] = email
     job_id = str(uuid.uuid4())
     jobs[job_id] = {"id": job_id, "flow_token": flow_token, "status": "queued"}
     flow["status"] = "queued"
-    _save_json(JOBS_PATH, jobs); _save_json(FLOWS_PATH, flows)
+    _save_json(JOBS_PATH, jobs)
+    _save_json(FLOWS_PATH, flows)
     return {"ok": True, "job_id": job_id}
 
 @app.get("/jobs/next")
 def get_next_job():
     for jid, j in jobs.items():
         if j["status"] == "queued":
-            j["status"] = "processing"; _save_json(JOBS_PATH, jobs)
+            j["status"] = "processing"
+            _save_json(JOBS_PATH, jobs)
             flow = flows.get(j["flow_token"])
             return {"id": jid, "flow_token": j["flow_token"], "vehicle_type": flow.get("vehicle_type", "Otomobil"), "images": flow["parts"]}
     return JSONResponse({"id": None}, status_code=204)
@@ -282,10 +302,12 @@ def get_next_job():
 def submit_job_result(job_id: str, payload: Dict[str, Any]):
     j = jobs.get(job_id)
     if not j: return {"error": "Job not found"}
-    j["status"] = "done"; j["result"] = payload
+    j["status"] = "done"
+    j["result"] = payload
     flow = flows.get(j["flow_token"])
     if flow:
-        flow["status"] = "done"; flow["report"] = payload
+        flow["status"] = "done"
+        flow["report"] = payload
         _save_json(FLOWS_PATH, flows)
         if flow.get("email"):
             send_report_email(flow["email"], j["flow_token"], payload, flow.get("vehicle_type", "Otomobil"))
