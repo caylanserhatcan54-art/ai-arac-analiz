@@ -32,7 +32,12 @@ load_dotenv()
 # =========================================================
 APP_ENV = os.getenv("APP_ENV", "prod")
 BASE_URL = os.getenv("BASE_URL", "https://ai-arac-analiz-backend.onrender.com").rstrip("/")
-ALLOWED_ORIGINS = ["*"] # Test aşamasında CORS sorununu kökten çözmek için
+# Banka ağları için ALLOWED_ORIGINS kısmını daha spesifik yapıyoruz
+ALLOWED_ORIGINS = [
+    "https://carvix.site", 
+    "https://www.carvix.site", 
+    "http://localhost:3000"
+]
 LEMON_SQUEEZY_WEBHOOK_SECRET = os.getenv("LEMON_SQUEEZY_WEBHOOK_SECRET", "")
 TAMI_API_URL = "https://api.tami.com.tr/v1/payment/init"
 TAMI_MERCHANT_NO = "77019267"
@@ -175,8 +180,31 @@ flows = _load_json(FLOWS_PATH, {})
 jobs = _load_json(JOBS_PATH, {})
 
 app = FastAPI()
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+# KRİTİK DÜZELTME: CORS ayarlarını banka firewall'larını geçecek şekilde düzenledik
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], # Geçici olarak tam açık, bankacı testinden sonra ALLOWED_ORIGINS ile değiştirilebilir
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"]
+)
+
 app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
+
+# Preflight (OPTIONS) istekleri için manuel handler ekledik (Bazı kurumsal ağlar için şart)
+@app.options("/{rest_of_path:path}")
+async def preflight_handler(request: Request, rest_of_path: str):
+    return Response(
+        content="OK",
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "*",
+            "Access-Control-Allow-Headers": "*",
+        },
+    )
 
 @app.post("/api/payment/shopier-callback")
 async def shopier_callback(request: Request):
@@ -247,7 +275,6 @@ def submit_job_result(job_id: str, payload: Dict[str, Any]):
             send_report_email(flow["email"], j["flow_token"], payload, flow.get("vehicle_type", "Otomobil"))
     _save_json(JOBS_PATH, jobs); return {"ok": True}
 
-# KRİTİK EKLENTİ: AI HATA ALIRSA BURAYA GELECEK
 @app.post("/jobs/{job_id}/failed")
 def job_failed(job_id: str, payload: Dict[str, Any] = Body(...)):
     print(f"DEBUG: AI Hatası - Job ID: {job_id} - Sebep: {payload.get('error')}")
@@ -265,4 +292,5 @@ def get_report(flow_token: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000)
+    # Dosya adı main.py olduğu için uvicorn "main:app" şeklinde çağrılmalı
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
