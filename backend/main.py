@@ -7,6 +7,7 @@ import hashlib
 import base64
 import smtplib
 import io
+import re  # RegEx import edildi
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
@@ -44,7 +45,9 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 FLOWS_PATH = DATA_DIR / "flows.json"
 JOBS_PATH = DATA_DIR / "jobs.json"
 
-# Her araç tipi için profesyonel şema eşleşmesi
+# Dosya yollarına göre güncellenen profesyonel şema eşleşmesi
+# Not: Dosya isimlerinde boşluk varsa ("car-base .png" gibi), sunucu tarafında 
+# bunları "car-base.png" olarak düzelttiğinizi varsayıyoruz.
 VEHICLE_CONFIGS = {
     "Otomobil": {"base_img": "https://www.carvix.site/car-base.png", "label": "Binek Araç"},
     "Motosiklet": {"base_img": "https://www.carvix.site/moto-base.png", "label": "Motosiklet"},
@@ -91,8 +94,6 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
             color = "#dc2626" if "KRITIK" in status else ("#f59e0b" if "GOZLEM" in status else "#2563eb")
             
             # SAM Güven Skoru Çubuğu Hesaplama
-            # Not içindeki "%" işaretini bulup sayıya çeviriyoruz
-            import re
             score_match = re.search(r'%(\d+)', p.get('note', '0'))
             score_val = int(score_match.group(1)) if score_match else 0
             
@@ -308,6 +309,12 @@ def get_next_job():
 def submit_job_result(job_id: str, payload: Dict[str, Any]):
     j = jobs.get(job_id)
     if not j: return {"error": "Job not found"}
+    
+    # KORUMA: Eğer analiz boşsa hatalı rapor basma
+    if not payload.get("parts_analysis") and payload.get("plate") == "Tespit Edilemedi":
+        print(f">>> HATA: {job_id} için analiz boş geldi.")
+        return {"ok": False, "message": "Analiz verisi boş"}
+
     j["status"] = "done"
     j["result"] = payload
     flow = flows.get(j["flow_token"])
