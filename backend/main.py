@@ -27,6 +27,14 @@ from xhtml2pdf import pisa
 load_dotenv()
 
 # =========================================================
+# KARAKTER TEMIZLEME FONKSIYONU (S, I, G, O, U YAPAR)
+# =========================================================
+def clear_tr(text):
+    if not text: return ""
+    tr_map = str.maketrans("İıŞşĞğÇçÖöÜü", "IiSsGgCcOoUu")
+    return str(text).translate(tr_map)
+
+# =========================================================
 # ENV & AYARLAR
 # =========================================================
 APP_ENV = os.getenv("APP_ENV", "prod")
@@ -46,12 +54,12 @@ FLOWS_PATH = DATA_DIR / "flows.json"
 JOBS_PATH = DATA_DIR / "jobs.json"
 
 VEHICLE_CONFIGS = {
-    "Otomobil": {"base_img": "https://www.carvix.site/car-base.png", "label": "Binek Araç"},
+    "Otomobil": {"base_img": "https://www.carvix.site/car-base.png", "label": "Binek Arac"},
     "Motosiklet": {"base_img": "https://www.carvix.site/moto-base.png", "label": "Motosiklet"},
     "Pickup": {"base_img": "https://www.carvix.site/pickup-base.png", "label": "Pickup / Kamyonet"},
-    "Van": {"base_img": "https://www.carvix.site/van-base.png", "label": "Ticari Araç"},
-    "ATV": {"base_img": "https://www.carvix.site/atv-base.png", "label": "ATV / Arazi Aracı"},
-    "Elektrikli": {"base_img": "https://www.carvix.site/car-base.png", "label": "Elektrikli Araç"}
+    "Van": {"base_img": "https://www.carvix.site/van-base.png", "label": "Ticari Arac"},
+    "ATV": {"base_img": "https://www.carvix.site/atv-base.png", "label": "ATV / Arazi Araci"},
+    "Elektrikli": {"base_img": "https://www.carvix.site/car-base.png", "label": "Elektrikli Arac"}
 }
 
 # =========================================================
@@ -75,130 +83,99 @@ def make_public_upload_url(filename: str):
     return f"{BASE_URL}/uploads/{filename}"
 
 # =========================================================
-# MODERN PDF ÜRETME (GELİŞMİŞ EKSPER FORMATI)
+# GÖRSEL DESTEKLİ MODERN PDF ÜRETME
 # =========================================================
 def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Otomobil"):
     try:
         config = VEHICLE_CONFIGS.get(vehicle_type, VEHICLE_CONFIGS["Otomobil"])
         parts_analysis = report_data.get('parts_analysis', [])
-        ai_comment = report_data.get('ai_comment', "Analiz başarıyla tamamlandı.")
-        plate = report_data.get('plate', 'BELİRLENEMEDİ')
+        ai_comment = clear_tr(report_data.get('ai_comment', "Analiz basariyla tamamlandi."))
+        plate = clear_tr(report_data.get('plate', 'BELIRLENEMEDI'))
         
-        rows_html = ""
+        # ANALİZ KARTLARI (GÖRSEL KANITLI)
+        cards_html = ""
         for p in parts_analysis:
-            status = p['status'].upper()
-            # Kritik=Kırmızı, Gözlem=Turuncu, Sağlıklı=Yeşil
-            color = "#dc2626" if "KRITIK" in status else ("#f59e0b" if "GOZLEM" in status else "#10b981")
+            p_name = clear_tr(p['name'])
+            status = clear_tr(p['status']).upper()
+            note = clear_tr(p.get('note', '-'))
+            # Vast.ai'den gelmesi gereken hasarlı resim linki
+            img_url = p.get('image_url', '') 
             
-            score_match = re.search(r'%(\d+)', p.get('note', '0'))
+            color = "#dc2626" if "KRITIK" in status else ("#f59e0b" if "GOZLEM" in status else "#2563eb")
+            score_match = re.search(r'%(\d+)', note)
             score_val = int(score_match.group(1)) if score_match else 0
             
-            rows_html += f"""
-            <tr style="border-bottom: 1px solid #edf2f7;">
-                <td style="padding: 12px; font-weight: bold; color: #1e293b; font-size: 11px;">{p['name']}</td>
-                <td style="padding: 12px;">
-                    <span style="color: {color}; font-weight: bold; font-size: 10px;">● {status}</span>
-                </td>
-                <td style="padding: 12px;">
-                    <div style="font-size: 9px; color: #64748b; margin-bottom: 2px;">{p.get('note', '-')}</div>
-                    <div style="width: 80px; background: #e2e8f0; height: 5px; border-radius: 3px;">
-                        <div style="width: {score_val}%; background: {color}; height: 5px; border-radius: 3px;"></div>
-                    </div>
-                </td>
-            </tr>"""
+            cards_html += f"""
+            <div style="border: 1px solid #e2e8f0; border-radius: 10px; margin-bottom: 20px; padding: 15px; background: #ffffff;">
+                <table width="100%">
+                    <tr>
+                        <td width="60%" style="vertical-align: top;">
+                            <div style="font-size: 14px; font-weight: bold; color: #0f172a; margin-bottom: 5px;">{p_name}</div>
+                            <div style="color: {color}; font-weight: bold; font-size: 12px; margin-bottom: 10px;">● {status}</div>
+                            <div style="font-size: 10px; color: #64748b; margin-bottom: 10px; line-height: 1.4;">{note}</div>
+                            <div style="width: 150px; background: #f1f5f9; height: 8px; border-radius: 4px; overflow: hidden;">
+                                <div style="width: {score_val}%; background: {color}; height: 8px;"></div>
+                            </div>
+                            <div style="font-size: 9px; color: #94a3b8; margin-top: 5px;">Yapay Zeka Tespit Guveni: %{score_val}</div>
+                        </td>
+                        <td width="40%" style="text-align: right; vertical-align: middle;">
+                            {f'<img src="{img_url}" style="width: 180px; height: 110px; border-radius: 8px; border: 2px solid #f1f5f9; object-fit: cover;">' if img_url else '<div style="font-size: 10px; color: #cbd5e1; border: 1px dashed #cbd5e1; padding: 20px; text-align:center;">Gorsel Kanit<br>Analiz Ediliyor</div>'}
+                        </td>
+                    </tr>
+                </table>
+            </div>"""
 
-        # HTML Şablonu - Türkçe Karakter ve Modern Arayüz Fix
         html_template = f"""
-        <!DOCTYPE html>
         <html>
         <head>
             <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
             <style>
                 @page {{ size: A4; margin: 0; }}
-                body {{ font-family: 'Helvetica', 'Arial', sans-serif; background-color: #f8fafc; margin: 0; padding: 0; color: #1e293b; }}
-                
-                .header-gradient {{ background: #0f172a; color: #ffffff; padding: 40px 20px; text-align: center; border-bottom: 4px solid #3b82f6; }}
-                .brand-title {{ font-size: 26px; font-weight: bold; letter-spacing: 2px; color: #3b82f6; }}
-                
-                .container {{ width: 88%; margin: -30px auto 0; background: #ffffff; border-radius: 12px; padding: 25px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }}
-                
-                .info-bar {{ display: table; width: 100%; border-bottom: 1px solid #e2e8f0; padding-bottom: 15px; margin-bottom: 20px; }}
-                .info-item {{ display: table-cell; width: 33.3%; font-size: 11px; }}
-                .info-label {{ color: #64748b; text-transform: uppercase; font-size: 9px; font-weight: bold; }}
-                .info-value {{ color: #0f172a; font-weight: bold; font-size: 12px; }}
-
-                .ai-section {{ background: #f0f9ff; border-radius: 8px; padding: 15px; border-left: 4px solid #3b82f6; margin-bottom: 25px; }}
-                .section-title {{ font-size: 13px; font-weight: bold; color: #0f172a; margin-bottom: 10px; text-transform: uppercase; border-bottom: 1px solid #3b82f6; display: inline-block; }}
-
-                table {{ width: 100%; border-collapse: collapse; }}
-                th {{ text-align: left; font-size: 10px; color: #64748b; padding: 10px; background: #f1f5f9; text-transform: uppercase; }}
-                
-                .footer {{ text-align: center; padding: 25px; color: #94a3b8; font-size: 9px; line-height: 1.4; }}
-                .car-schema {{ text-align: center; margin: 20px 0; }}
+                body {{ font-family: Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 0; color: #1e293b; }}
+                .header {{ background: #0f172a; color: #ffffff; padding: 40px 20px; text-align: center; border-bottom: 5px solid #3b82f6; }}
+                .container {{ width: 88%; margin: -30px auto 0; background: #ffffff; border-radius: 15px; padding: 30px; box-shadow: 0 10px 20px rgba(0,0,0,0.05); }}
+                .info-bar {{ display: table; width: 100%; border-bottom: 2px solid #f1f5f9; padding-bottom: 15px; margin-bottom: 25px; }}
+                .info-item {{ display: table-cell; width: 33%; font-size: 12px; }}
+                .section-title {{ font-size: 14px; font-weight: bold; color: #0f172a; margin: 25px 0 15px 0; text-transform: uppercase; border-left: 4px solid #3b82f6; padding-left: 12px; }}
+                .ai-summary {{ background: #f0f9ff; border-radius: 10px; padding: 20px; font-size: 12px; line-height: 1.6; color: #1e40af; margin-bottom: 20px; }}
+                .footer {{ text-align: center; padding: 30px; color: #94a3b8; font-size: 10px; }}
             </style>
         </head>
         <body>
-            <div class="header-gradient">
-                <div class="brand-title">CARVIX AI</div>
-                <div style="font-size: 12px; opacity: 0.8; margin-top: 5px;">OTONOM ARAÇ EKSPERTİZ RAPORU</div>
+            <div class="header">
+                <div style="font-size: 30px; font-weight: bold; letter-spacing: 2px; color: #3b82f6;">CARVIX AI</div>
+                <div style="font-size: 13px; opacity: 0.8; margin-top: 8px;">PROFESYONEL DIJITAL EKSPERTIZ RAPORU</div>
             </div>
-
             <div class="container">
                 <div class="info-bar">
-                    <div class="info-item">
-                        <div class="info-label">ARAÇ PLAKASI</div>
-                        <div class="info-value">{plate}</div>
-                    </div>
-                    <div class="info-item" style="text-align: center;">
-                        <div class="info-label">ARAÇ TÜRÜ</div>
-                        <div class="info-value">{config['label']}</div>
-                    </div>
-                    <div class="info-item" style="text-align: right;">
-                        <div class="info-label">RAPOR TARİHİ</div>
-                        <div class="info-value">{time.strftime('%d.%m.%Y %H:%M')}</div>
-                    </div>
+                    <div class="info-item"><b>PLAKA:</b><br>{plate}</div>
+                    <div class="info-item" style="text-align: center;"><b>ARAC TURU:</b><br>{clear_tr(config['label'])}</div>
+                    <div class="info-item" style="text-align: right;"><b>RAPOR TARIHI:</b><br>{time.strftime('%d.%m.%Y %H:%M')}</div>
                 </div>
 
-                <div class="section-title">YAPAY ZEKA ANALİZ ÖZETİ</div>
-                <div class="ai-section">
-                    <div style="font-size: 11px; line-height: 1.6; color: #1e293b;">{ai_comment}</div>
+                <div class="section-title">YAPAY ZEKA ANALIZ OZETI</div>
+                <div class="ai-summary">{ai_comment}</div>
+
+                <div style="text-align: center; margin: 30px 0;">
+                    <img src="{config['base_img']}" style="width: 350px;">
+                    <div style="font-size: 9px; color: #94a3b8; margin-top: 10px;">* Dijital Hasar Tespit Semasi</div>
                 </div>
 
-                <div class="car-schema">
-                    <img src="{config['base_img']}" style="width: 380px;">
-                    <div style="font-size: 8px; color: #cbd5e1; margin-top: 5px;">* Dijital Hasar Dağılım Şeması</div>
-                </div>
-
-                <div class="section-title">DETAYLI EKSPERTİZ LİSTESİ</div>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>BÖLGE / PARÇA</th>
-                            <th>DURUM</th>
-                            <th>ANALİZ VERİSİ & GÜVEN</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {rows_html}
-                    </tbody>
-                </table>
+                <div class="section-title">DETAYLI EKSPERTIZ VE GORSEL KANITLAR</div>
+                {cards_html}
             </div>
-
             <div class="footer">
-                <strong>YASAL UYARI:</strong> Bu rapor Carvix AI tarafından üretilen bir ön analizdir. 
-                Kesin sonuçlar için TSE onaylı fiziksel muayene yapılması önerilir.<br>
-                <span style="color: #3b82f6; font-weight: bold; font-size: 11px;">www.carvix.site</span>
-                <div style="margin-top: 10px; opacity: 0.5;">ID: {flow_token.upper()}</div>
+                <b>YASAL UYARI:</b> Bu rapor Carvix AI tarafindan uretilmis bir on analizdir. Kesin sonuc icin TSE muayenesi onerilir.<br>
+                <span style="color: #3b82f6;">www.carvix.site</span> | Rapor ID: {flow_token.upper()}
             </div>
         </body>
-        </html>
-        """
+        </html>"""
+
         result_file = io.BytesIO()
-        # UTF-8 Encoding buradaki en kritik parça
-        pisa.CreatePDF(io.BytesIO(html_template.encode("utf-8")), dest=result_file, encoding='utf-8')
+        pisa.CreatePDF(io.StringIO(html_template), dest=result_file)
         return result_file.getvalue()
     except Exception as e:
-        print(f"PDF Hatası: {e}"); return None
+        print(f"PDF Hatasi: {e}"); return None
 
 # =========================================================
 # MAİL FONKSİYONU
@@ -208,9 +185,9 @@ def send_report_email(customer_email: str, flow_token: str, report_content: Any,
         msg = MIMEMultipart()
         msg['From'] = f"Carvix AI <{SENDER_EMAIL}>"
         msg['To'] = customer_email
-        msg['Subject'] = f"Ekspertiz Raporunuz Hazır - {vehicle_type}"
+        msg['Subject'] = f"Ekspertiz Raporunuz Hazir - {vehicle_type}"
         
-        body = f"Sayın Müşterimiz,\n\nAracınız için yapılan yapay zeka destekli analiz tamamlanmıştır. Detaylı raporunuz ekteki PDF dosyasında yer almaktadır.\n\nBizi tercih ettiğiniz için teşekkür ederiz.\n\nCarvix AI Ekibi"
+        body = f"Sayin Musterimiz,\n\nAraciniz icin yapilan yapay zeka destekli analiz tamamlanmistir. Detayli raporunuz ekteki PDF dosyasinda yer almaktadir.\n\nBizi tercih ettiginiz icin tesekkur ederiz.\n\nCarvix AI Ekibi"
         msg.attach(MIMEText(body, 'plain'))
 
         pdf_data = create_pdf_report(flow_token, report_content, vehicle_type)
@@ -224,10 +201,10 @@ def send_report_email(customer_email: str, flow_token: str, report_content: Any,
             server.send_message(msg)
         return True
     except Exception as e:
-        print(f"Mail Hatası: {e}"); return False
+        print(f"Mail Hatasi: {e}"); return False
 
 # =========================================================
-# APP & ENDPOINTS
+# APP & ENDPOINTS (EKSİKSİZ TAM LİSTE)
 # =========================================================
 app = FastAPI()
 
@@ -304,8 +281,7 @@ def submit_job_result(job_id: str, payload: Dict[str, Any]):
     if not j: return {"error": "Job not found"}
     
     if not payload.get("parts_analysis") and payload.get("plate") == "Tespit Edilemedi":
-        print(f">>> HATA: {job_id} için analiz boş geldi.")
-        return {"ok": False, "message": "Analiz verisi boş"}
+        return {"ok": False, "message": "Analiz verisi bos"}
 
     j["status"] = "done"
     j["result"] = payload
