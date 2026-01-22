@@ -7,7 +7,7 @@ import hashlib
 import base64
 import smtplib
 import io
-import re  # RegEx import edildi
+import re
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
@@ -45,9 +45,6 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 FLOWS_PATH = DATA_DIR / "flows.json"
 JOBS_PATH = DATA_DIR / "jobs.json"
 
-# Dosya yollarına göre güncellenen profesyonel şema eşleşmesi
-# Not: Dosya isimlerinde boşluk varsa ("car-base .png" gibi), sunucu tarafında 
-# bunları "car-base.png" olarak düzelttiğinizi varsayıyoruz.
 VEHICLE_CONFIGS = {
     "Otomobil": {"base_img": "https://www.carvix.site/car-base.png", "label": "Binek Araç"},
     "Motosiklet": {"base_img": "https://www.carvix.site/moto-base.png", "label": "Motosiklet"},
@@ -90,94 +87,95 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
         rows_html = ""
         for p in parts_analysis:
             status = p['status'].upper()
-            # Renk Kodları: Kritik=Kırmızı, Gözlem=Turuncu, Diğer=Mavi
-            color = "#dc2626" if "KRITIK" in status else ("#f59e0b" if "GOZLEM" in status else "#2563eb")
+            # Kritik=Kırmızı, Gözlem=Turuncu, Sağlıklı=Yeşil
+            color = "#dc2626" if "KRITIK" in status else ("#f59e0b" if "GOZLEM" in status else "#10b981")
             
-            # SAM Güven Skoru Çubuğu Hesaplama
             score_match = re.search(r'%(\d+)', p.get('note', '0'))
             score_val = int(score_match.group(1)) if score_match else 0
             
             rows_html += f"""
             <tr style="border-bottom: 1px solid #edf2f7;">
-                <td style="padding: 15px; font-weight: bold; color: #1e293b; font-size: 12px;">{p['name']}</td>
-                <td style="padding: 15px;">
-                    <span style="color: {color}; font-weight: 800; font-size: 10px;">● {status}</span>
+                <td style="padding: 12px; font-weight: bold; color: #1e293b; font-size: 11px;">{p['name']}</td>
+                <td style="padding: 12px;">
+                    <span style="color: {color}; font-weight: bold; font-size: 10px;">● {status}</span>
                 </td>
-                <td style="padding: 15px;">
-                    <div style="font-size: 10px; color: #64748b; margin-bottom: 4px;">{p.get('note', '-')}</div>
-                    <div style="width: 100px; background: #e2e8f0; height: 6px; border-radius: 3px;">
-                        <div style="width: {score_val}%; background: {color}; height: 6px; border-radius: 3px;"></div>
+                <td style="padding: 12px;">
+                    <div style="font-size: 9px; color: #64748b; margin-bottom: 2px;">{p.get('note', '-')}</div>
+                    <div style="width: 80px; background: #e2e8f0; height: 5px; border-radius: 3px;">
+                        <div style="width: {score_val}%; background: {color}; height: 5px; border-radius: 3px;"></div>
                     </div>
                 </td>
             </tr>"""
 
+        # HTML Şablonu - Türkçe Karakter ve Modern Arayüz Fix
         html_template = f"""
+        <!DOCTYPE html>
         <html>
         <head>
-            <meta charset="UTF-8">
+            <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
             <style>
                 @page {{ size: A4; margin: 0; }}
-                body {{ font-family: Helvetica, Arial, sans-serif; background-color: #ffffff; margin: 0; padding: 0; color: #1e293b; }}
-                .header {{ background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: white; padding: 40px 20px; text-align: center; }}
-                .carvix-brand {{ color: #3b82f6; font-size: 28px; font-weight: 900; letter-spacing: -1px; }}
-                .badge {{ background: rgba(59, 130, 246, 0.1); color: #3b82f6; padding: 4px 12px; border-radius: 20px; font-size: 10px; font-weight: bold; text-transform: uppercase; }}
+                body {{ font-family: 'Helvetica', 'Arial', sans-serif; background-color: #f8fafc; margin: 0; padding: 0; color: #1e293b; }}
                 
-                .container {{ width: 90%; margin: -30px auto 0; background: white; border-radius: 16px; padding: 30px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); border: 1px solid #f1f5f9; }}
+                .header-gradient {{ background: #0f172a; color: #ffffff; padding: 40px 20px; text-align: center; border-bottom: 4px solid #3b82f6; }}
+                .brand-title {{ font-size: 26px; font-weight: bold; letter-spacing: 2px; color: #3b82f6; }}
                 
-                .info-card {{ display: table; width: 100%; margin-bottom: 25px; background: #f8fafc; padding: 15px; border-radius: 12px; }}
-                .info-column {{ display: table-cell; width: 33%; }}
-                .label {{ font-size: 9px; color: #64748b; text-transform: uppercase; font-weight: bold; }}
-                .value {{ font-size: 13px; color: #0f172a; font-weight: 800; }}
+                .container {{ width: 88%; margin: -30px auto 0; background: #ffffff; border-radius: 12px; padding: 25px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }}
+                
+                .info-bar {{ display: table; width: 100%; border-bottom: 1px solid #e2e8f0; padding-bottom: 15px; margin-bottom: 20px; }}
+                .info-item {{ display: table-cell; width: 33.3%; font-size: 11px; }}
+                .info-label {{ color: #64748b; text-transform: uppercase; font-size: 9px; font-weight: bold; }}
+                .info-value {{ color: #0f172a; font-weight: bold; font-size: 12px; }}
 
-                .expert-comment {{ background: #f0f9ff; border-radius: 12px; padding: 20px; border-left: 5px solid #3b82f6; margin-bottom: 30px; }}
-                .section-title {{ font-size: 14px; font-weight: 900; color: #0f172a; margin-bottom: 15px; border-bottom: 2px solid #3b82f6; display: inline-block; }}
+                .ai-section {{ background: #f0f9ff; border-radius: 8px; padding: 15px; border-left: 4px solid #3b82f6; margin-bottom: 25px; }}
+                .section-title {{ font-size: 13px; font-weight: bold; color: #0f172a; margin-bottom: 10px; text-transform: uppercase; border-bottom: 1px solid #3b82f6; display: inline-block; }}
 
                 table {{ width: 100%; border-collapse: collapse; }}
-                th {{ text-align: left; font-size: 10px; color: #64748b; padding: 10px 15px; background: #f1f5f9; text-transform: uppercase; }}
+                th {{ text-align: left; font-size: 10px; color: #64748b; padding: 10px; background: #f1f5f9; text-transform: uppercase; }}
                 
-                .footer {{ text-align: center; padding: 30px; background: #f8fafc; margin-top: 40px; border-top: 1px solid #e2e8f0; }}
-                .warning-text {{ font-size: 8px; color: #94a3b8; line-height: 1.5; max-width: 80%; margin: 0 auto; }}
+                .footer {{ text-align: center; padding: 25px; color: #94a3b8; font-size: 9px; line-height: 1.4; }}
+                .car-schema {{ text-align: center; margin: 20px 0; }}
             </style>
         </head>
         <body>
-            <div class="header">
-                <div class="carvix-brand">CARVIX AI</div>
-                <div style="font-size: 14px; opacity: 0.8; margin-top: 5px;">OTONOM ARAÇ EKSPERTİZ SİSTEMİ</div>
+            <div class="header-gradient">
+                <div class="brand-title">CARVIX AI</div>
+                <div style="font-size: 12px; opacity: 0.8; margin-top: 5px;">OTONOM ARAÇ EKSPERTİZ RAPORU</div>
             </div>
 
             <div class="container">
-                <div class="info-card">
-                    <div class="info-column">
-                        <div class="label">ARAÇ PLAKASI</div>
-                        <div class="value">{plate}</div>
+                <div class="info-bar">
+                    <div class="info-item">
+                        <div class="info-label">ARAÇ PLAKASI</div>
+                        <div class="info-value">{plate}</div>
                     </div>
-                    <div class="info-column" style="text-align: center;">
-                        <div class="label">ARAÇ SEGMENTİ</div>
-                        <div class="value">{config['label']}</div>
+                    <div class="info-item" style="text-align: center;">
+                        <div class="info-label">ARAÇ TÜRÜ</div>
+                        <div class="info-value">{config['label']}</div>
                     </div>
-                    <div class="info-column" style="text-align: right;">
-                        <div class="label">RAPOR TARİHİ</div>
-                        <div class="value">{time.strftime('%d.%m.%Y %H:%M')}</div>
+                    <div class="info-item" style="text-align: right;">
+                        <div class="info-label">RAPOR TARİHİ</div>
+                        <div class="info-value">{time.strftime('%d.%m.%Y %H:%M')}</div>
                     </div>
                 </div>
 
-                <div class="section-title">YAPAY ZEKA ANALİZ YORUMU</div>
-                <div class="expert-comment">
-                    <div style="font-size: 12px; line-height: 1.6; color: #334155;">{ai_comment}</div>
+                <div class="section-title">YAPAY ZEKA ANALİZ ÖZETİ</div>
+                <div class="ai-section">
+                    <div style="font-size: 11px; line-height: 1.6; color: #1e293b;">{ai_comment}</div>
                 </div>
 
-                <div style="text-align: center; margin: 30px 0;">
-                    <img src="{config['base_img']}" style="width: 420px; opacity: 0.9;">
-                    <p style="font-size: 9px; color: #94a3b8;">* Dijital tarama şematik gösterimidir.</p>
+                <div class="car-schema">
+                    <img src="{config['base_img']}" style="width: 380px;">
+                    <div style="font-size: 8px; color: #cbd5e1; margin-top: 5px;">* Dijital Hasar Dağılım Şeması</div>
                 </div>
 
-                <div class="section-title">DETAYLI PARÇA ANALİZİ</div>
+                <div class="section-title">DETAYLI EKSPERTİZ LİSTESİ</div>
                 <table>
                     <thead>
                         <tr>
-                            <th>BÖLGE / BİLEŞEN</th>
+                            <th>BÖLGE / PARÇA</th>
                             <th>DURUM</th>
-                            <th>SAM DOĞRULAMA & GÜVEN SKORU</th>
+                            <th>ANALİZ VERİSİ & GÜVEN</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -187,22 +185,17 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
             </div>
 
             <div class="footer">
-                <div style="margin-bottom: 15px;">
-                    <span class="badge">RAPOR ID: {flow_token.upper()}</span>
-                </div>
-                <div class="warning-text">
-                    <strong>YASAL BİLGİLENDİRME:</strong> Bu rapor Carvix AI motoru tarafından üretilmiş bir ön incelemedir. 
-                    Işık, kamera açısı ve çevresel faktörler analiz sonuçlarını etkileyebilir. 
-                    Resmi işlemler için TSE onaylı fiziksel ekspertiz yaptırılması zorunludur. 
-                    Carvix AI, bu raporun kullanımından doğabilecek maddi/manevi zararlardan sorumlu tutulamaz.
-                </div>
-                <div style="font-size: 10px; font-weight: bold; margin-top: 20px; color: #3b82f6;">www.carvix.site</div>
+                <strong>YASAL UYARI:</strong> Bu rapor Carvix AI tarafından üretilen bir ön analizdir. 
+                Kesin sonuçlar için TSE onaylı fiziksel muayene yapılması önerilir.<br>
+                <span style="color: #3b82f6; font-weight: bold; font-size: 11px;">www.carvix.site</span>
+                <div style="margin-top: 10px; opacity: 0.5;">ID: {flow_token.upper()}</div>
             </div>
         </body>
         </html>
         """
         result_file = io.BytesIO()
-        pisa.CreatePDF(io.StringIO(html_template), dest=result_file)
+        # UTF-8 Encoding buradaki en kritik parça
+        pisa.CreatePDF(io.BytesIO(html_template.encode("utf-8")), dest=result_file, encoding='utf-8')
         return result_file.getvalue()
     except Exception as e:
         print(f"PDF Hatası: {e}"); return None
@@ -310,7 +303,6 @@ def submit_job_result(job_id: str, payload: Dict[str, Any]):
     j = jobs.get(job_id)
     if not j: return {"error": "Job not found"}
     
-    # KORUMA: Eğer analiz boşsa hatalı rapor basma
     if not payload.get("parts_analysis") and payload.get("plate") == "Tespit Edilemedi":
         print(f">>> HATA: {job_id} için analiz boş geldi.")
         return {"ok": False, "message": "Analiz verisi boş"}
