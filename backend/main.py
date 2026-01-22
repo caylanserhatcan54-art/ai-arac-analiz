@@ -52,6 +52,7 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 FLOWS_PATH = DATA_DIR / "flows.json"
 JOBS_PATH = DATA_DIR / "jobs.json"
 
+# public klasörüne attığın şemalarla eşleşen konfigürasyon
 VEHICLE_CONFIGS = {
     "Otomobil": {"base_img": "https://www.carvix.site/car-base.png", "label": "Binek Arac"},
     "Motosiklet": {"base_img": "https://www.carvix.site/moto-base.png", "label": "Motosiklet"},
@@ -82,14 +83,14 @@ def make_public_upload_url(filename: str):
     return f"{BASE_URL}/uploads/{filename}"
 
 # =========================================================
-# GÖRSELDEKİ PROMPT STİLİNDE PDF ÜRETME (YENİLENDİ)
+# GÖRSELDEKİ PROMPT STİLİNDE PDF ÜRETME
 # =========================================================
 def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Otomobil"):
     try:
         config = VEHICLE_CONFIGS.get(vehicle_type, VEHICLE_CONFIGS["Otomobil"])
         parts_analysis = report_data.get('parts_analysis', [])
-        ai_comment = clear_tr(report_data.get('ai_comment', "Arac genel olarak iyi durumdadir."))
-        plate = clear_tr(report_data.get('plate', '34 ABC 123'))
+        ai_comment = clear_tr(report_data.get('ai_comment', "Arac genel durumu analiz edildi."))
+        plate = clear_tr(report_data.get('plate', 'TESPIT EDILEMEDI'))
         
         table_rows_html = ""
         for p in parts_analysis:
@@ -98,26 +99,29 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
             note = clear_tr(p.get('note', '-'))
             img_url = p.get('image_url', '') 
             
-            # Dinamik Durum Renkleri (Prompttaki gibi yeşil/sarı/kırmızı)
-            if "ORIJINAL" in status or "TAMAM" in status:
+            # app.py'den gelen yeni statülere göre renk ataması
+            if "TAMAM" in status or "ORIJINAL" in status:
                 status_color = "#16a34a" # Yeşil
                 label = "TAMAM"
-            elif "GOZLEM" in status or "BOYALI" in status:
+            elif "KUSURLU" in status or "BOYALI" in status or "HASARLI" in status:
                 status_color = "#ca8a04" # Sarı/Turuncu
                 label = "KUSURLU"
-            else:
+            elif "KRITIK" in status:
                 status_color = "#dc2626" # Kırmızı
                 label = "KRITIK"
+            else:
+                status_color = "#64748b" # Gri (Bilinmeyen)
+                label = status
 
             table_rows_html += f"""
             <tr>
-                <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-weight: bold; font-size: 10px;">{p_name}</td>
-                <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; text-align: center;">
-                    <span style="color: {status_color}; font-weight: bold; font-size: 10px;">{label}</span>
+                <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; font-weight: bold; font-size: 10px;">{p_name}</td>
+                <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; text-align: center;">
+                    <div style="color: white; background-color: {status_color}; padding: 4px; border-radius: 4px; font-weight: bold; font-size: 9px;">{label}</div>
                 </td>
-                <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-size: 9px; color: #475569;">{note}</td>
+                <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; font-size: 9px; color: #475569;">{note}</td>
                 <td style="padding: 5px; border-bottom: 1px solid #e2e8f0; text-align: center;">
-                    {f'<img src="{img_url}" style="width: 100px; height: 60px; border: 1px solid #cbd5e1; border-radius: 3px;">' if img_url else '<div style="font-size: 7px; color: #94a3b8;">Gorsel Yok</div>'}
+                    {f'<img src="{img_url}" style="width: 110px; height: 70px; border: 1px solid #cbd5e1; border-radius: 4px;">' if img_url else '<div style="font-size: 7px; color: #94a3b8;">Gorsel Kanit Yok</div>'}
                 </td>
             </tr>"""
 
@@ -129,56 +133,58 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
                 @page {{ size: A4; margin: 1cm; }}
                 body {{ font-family: Helvetica, Arial, sans-serif; color: #1e293b; background-color: #ffffff; margin: 0; padding: 0; }}
                 .header {{ text-align: center; border-bottom: 3px solid #1e293b; padding-bottom: 10px; margin-bottom: 20px; }}
-                .header h1 {{ margin: 0; font-size: 24px; letter-spacing: 2px; }}
+                .header h1 {{ margin: 0; font-size: 26px; letter-spacing: 2px; color: #0f172a; }}
                 .info-section {{ margin-bottom: 20px; }}
                 .info-box {{ width: 100%; border: 1px solid #e2e8f0; border-collapse: collapse; }}
-                .info-box td {{ padding: 8px; border: 1px solid #e2e8f0; font-size: 10px; }}
-                .section-title {{ background: #f1f5f9; color: #1e293b; padding: 6px 10px; font-size: 11px; font-weight: bold; margin: 15px 0 10px 0; border-left: 4px solid #3b82f6; }}
-                .diagram-container {{ text-align: center; margin: 20px 0; border: 1px dashed #cbd5e1; padding: 15px; border-radius: 8px; }}
-                .ai-comment {{ padding: 10px; font-size: 10px; line-height: 1.5; color: #334155; background: #f8fafc; border: 1px solid #e2e8f0; }}
+                .info-box td {{ padding: 10px; border: 1px solid #e2e8f0; font-size: 10px; }}
+                .section-title {{ background: #f1f5f9; color: #1e293b; padding: 8px 12px; font-size: 11px; font-weight: bold; margin: 20px 0 10px 0; border-left: 5px solid #3b82f6; }}
+                .diagram-container {{ text-align: center; margin: 25px 0; border: 1px solid #f1f5f9; padding: 20px; background-color: #fafafa; border-radius: 12px; }}
+                .ai-comment {{ padding: 15px; font-size: 10px; line-height: 1.6; color: #334155; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; }}
                 .data-table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
-                .data-table th {{ background: #1e293b; color: white; padding: 8px; text-align: left; font-size: 9px; }}
-                .footer-table {{ width: 100%; margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 10px; }}
-                .signature {{ text-align: right; font-family: cursive; font-size: 14px; color: #64748b; }}
+                .data-table th {{ background: #0f172a; color: white; padding: 10px; text-align: left; font-size: 9px; text-transform: uppercase; }}
+                .footer-table {{ width: 100%; margin-top: 40px; border-top: 2px solid #f1f5f9; padding-top: 15px; }}
+                .signature {{ text-align: right; font-size: 12px; color: #64748b; font-weight: bold; }}
             </style>
         </head>
         <body>
             <div class="header">
-                <h1>EKSPERTIZ RAPORU</h1>
-                <div style="font-size: 10px; color: #64748b;">{time.strftime('%d OCAK %Y')}</div>
+                <h1>CARVIX AI EKSPERTIZ RAPORU</h1>
+                <div style="font-size: 11px; color: #64748b; margin-top: 5px;">{time.strftime('%d.%m.%Y %H:%M')} - Dijital Analiz Raporu</div>
             </div>
 
             <div class="info-section">
                 <table class="info-box">
                     <tr>
-                        <td width="20%"><b>ARAC BILGILERI</b></td>
-                        <td width="30%">CARVIX AI ANALIZ</td>
-                        <td width="20%"><b>PLAKA</b></td>
-                        <td width="30%">{plate}</td>
+                        <td width="20%" style="background:#f8fafc;"><b>ARAC TIPI</b></td>
+                        <td width="30%">{clear_tr(config['label'])}</td>
+                        <td width="20%" style="background:#f8fafc;"><b>PLAKA NO</b></td>
+                        <td width="30%"><b>{plate}</b></td>
                     </tr>
                     <tr>
-                        <td><b>MARKA/MODEL</b></td>
-                        <td>{clear_tr(config['label'])}</td>
-                        <td><b>RAPOR NO</b></td>
-                        <td>{flow_token[:8].upper()}</td>
+                        <td style="background:#f8fafc;"><b>ANALIZ TARIHI</b></td>
+                        <td>{time.strftime('%d/%m/%Y')}</td>
+                        <td style="background:#f8fafc;"><b>RAPOR ID</b></td>
+                        <td>#{flow_token[:8].upper()}</td>
                     </tr>
                 </table>
             </div>
 
-            <div class="section-title">KAPORTA - BOYA VE MEKANIK DURUMU</div>
+            <div class="section-title">ARAC SEMATIK ANALIZ GORUNUMU</div>
             <div class="diagram-container">
-                <img src="{config['base_img']}" style="width: 350px;">
-                <div style="font-size: 8px; color: #94a3b8; margin-top: 8px;">* Renkli alanlar yapay zeka tarafindan tespit edilen islem gormus bolgeleri temsil eder.</div>
+                <img src="{config['base_img']}" style="width: 380px;">
+                <div style="font-size: 9px; color: #64748b; margin-top: 12px; font-style: italic;">
+                    * Yukaridaki sema genel arac yapisini temsil eder. Detayli bulgular asagidaki tabloda listelenmistir.
+                </div>
             </div>
 
-            <div class="section-title">DETAYLI KONTROL LISTESI</div>
+            <div class="section-title">DETAYLI EKSPERTIZ KONTROL LISTESI</div>
             <table class="data-table">
                 <thead>
                     <tr>
-                        <th width="30%">PARCA ADI</th>
+                        <th width="25%">PARCA</th>
                         <th width="15%" style="text-align: center;">DURUM</th>
-                        <th width="35%">ACIKLAMA</th>
-                        <th width="20%" style="text-align: center;">GORSEL KANIT</th>
+                        <th width="40%">AI TESPIT NOTLARI</th>
+                        <th width="20%" style="text-align: center;">KANIT</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -186,22 +192,23 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
                 </tbody>
             </table>
 
-            <div class="section-title">SONUC VE ONERILER</div>
+            <div class="section-title">USTA YORUMU VE GENEL DEGERLENDIRME</div>
             <div class="ai-comment">
                 {ai_comment}
                 <br><br>
-                <b>Tahmini Onarim Maliyeti:</b> Yapay zeka tarafindan parca bazli analiz edilmektedir.
+                <i style="color: #64748b;">Not: Bu analiz yapay zeka tarafindan gorsel veriler kullanilarak hazirlanmistir. Mekanik aksam detaylari gorsel sinirlar dahilindedir.</i>
             </div>
 
             <table class="footer-table">
                 <tr>
-                    <td width="70%" style="font-size: 8px; color: #94a3b8;">
-                        Bu rapor dijital olarak olusturulmustur. Kesin sonuc icin fiziki muayene onerilir.<br>
-                        <b>CARVIX AI | www.carvix.site</b>
+                    <td width="70%" style="font-size: 9px; color: #94a3b8;">
+                        Bu rapor Carvix AI tarafindan bulut tabanli analiz edilmistir.<br>
+                        <b>CARVIX AI | Gelecegin Oto Ekspertiz Teknolojisi</b><br>
+                        www.carvix.site
                     </td>
                     <td width="30%" class="signature">
-                        <img src="https://www.carvix.site/logo.png" style="width: 40px;"><br>
-                        Carvix Digital Sign
+                        <img src="https://www.carvix.site/logo.png" style="width: 45px;"><br>
+                        <span style="font-size: 10px;">Dijital Onayli Rapor</span>
                     </td>
                 </tr>
             </table>
@@ -222,15 +229,15 @@ def send_report_email(customer_email: str, flow_token: str, report_content: Any,
         msg = MIMEMultipart()
         msg['From'] = f"Carvix AI <{SENDER_EMAIL}>"
         msg['To'] = customer_email
-        msg['Subject'] = f"Carvix AI Ekspertiz Raporunuz Hazir"
+        msg['Subject'] = f"Carvix AI | Arac Ekspertiz Raporu Hazir ({flow_token[:8].upper()})"
         
-        body = f"Sayin Musterimiz,\n\nDijital ekspertiz raporunuz ekte sunulmustur.\n\nKeyifli surusler dileriz."
+        body = f"Sayin Musterimiz,\n\nAraciniz icin yapay zeka analiz raporu tamamlanmistir. Detayli rapor ekteki PDF dosyasinda yer almaktadir.\n\nBizi tercih ettiginiz icin tesekkur ederiz.\n\nCarvix AI Ekibi"
         msg.attach(MIMEText(body, 'plain'))
 
         pdf_data = create_pdf_report(flow_token, report_content, vehicle_type)
         if pdf_data:
             attachment = MIMEApplication(pdf_data, _subtype="pdf")
-            attachment.add_header('Content-Disposition', 'attachment', filename=f"Carvix_Rapor_{flow_token[:8]}.pdf")
+            attachment.add_header('Content-Disposition', 'attachment', filename=f"Carvix_Ekspertiz_{flow_token[:8].upper()}.pdf")
             msg.attach(attachment)
 
         with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as server:
