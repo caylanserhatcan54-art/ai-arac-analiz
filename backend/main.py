@@ -11,7 +11,7 @@ from xhtml2pdf import pisa
 load_dotenv()
 
 # =========================================================
-# AYARLAR VE DIZINLER
+# AYARLAR VE ARAÇ ŞEMALARI (GÜNCELLENMİŞ ŞEMALAR)
 # =========================================================
 BASE_URL = os.getenv("BASE_URL", "https://ai-arac-analiz-backend.onrender.com").rstrip("/")
 SENDER_EMAIL = os.getenv("SENDER_EMAIL", "carvix.site@gmail.com")
@@ -25,11 +25,12 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 FLOWS_PATH = DATA_DIR / "flows.json"
 JOBS_PATH = DATA_DIR / "jobs.json"
 
+# Şemalar (Dosya adları senin belirttiğin web/public altındaki yeni isimlerle güncellendi)
 VEHICLE_CONFIGS = {
-    "Otomobil": {"schema": "https://www.carvix.site/car-schema.png", "label": "Binek Arac"},
+    "Otomobil": {"schema": "https://www.carvix.site/car-base.png", "label": "Binek Arac"},
     "Motosiklet": {"schema": "https://www.carvix.site/moto-base.png", "label": "Motosiklet"},
     "Pickup": {"schema": "https://www.carvix.site/pickup-base.png", "label": "Pickup / Kamyonet"},
-    "Van": {"schema": "https://www.carvix.site/van-base.png", "label": "Ticari Arac"},
+    "Van": {"schema": "https://www.carvix.site/van-base.png", "label": "Ticari Arac (Panelvan/Kamyon)"},
     "ATV": {"schema": "https://www.carvix.site/atv-base.png", "label": "ATV / Arazi Araci"},
     "Elektrikli": {"schema": "https://www.carvix.site/car-base.png", "label": "Elektrikli Arac"}
 }
@@ -51,13 +52,19 @@ def _save_json(path: Path, data):
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 # =========================================================
-# ŞIK VE DETAYLI PDF RAPOR ÜRETİCİ
+# ŞIK, ŞEMALI VE USTA YORUMLU PDF ÜRETİCİ
 # =========================================================
 def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Otomobil"):
     try:
+        # Araç tipine göre doğru şemayı seçer (Eşleşme hatasını giderir)
         config = VEHICLE_CONFIGS.get(vehicle_type, VEHICLE_CONFIGS["Otomobil"])
         parts_analysis = report_data.get('parts_analysis', [])
-        ai_comment = clear_tr(report_data.get('ai_comment', "Analiz verileri yapay zeka tarafından islendi."))
+        
+        # Usta Yorumu Filtreleme (Saçmalamaları ve bot gibi konuşmayı temizler)
+        raw_comment = report_data.get('ai_comment', "Teknik analiz yapildi.")
+        ai_comment = clear_tr(raw_comment).replace("Yapay zeka analizime gore", "Yapilan teknik inceleme sonucunda;")
+        ai_comment = ai_comment.replace("Selam,", "").replace("Merhaba,", "").strip()
+
         plate = clear_tr(report_data.get('plate', 'TESPIT EDILEMEDI'))
         report_id = f"#{flow_token[:8].upper()}"
         date_str = time.strftime("%d.%m.%Y %H:%M")
@@ -70,10 +77,10 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
             img_url = p.get('image_url', '') 
             
             # Durum Renkleri
-            status_color = "#16a34a" # Varsayılan Yeşil
+            status_color = "#16a34a" # Yeşil
             if any(x in status for x in ["KUSURLU", "BOYALI", "HASARLI", "DEGISEN", "EZIK", "CIZIK"]):
-                status_color = "#ca8a04" # Turuncu/Sarı
-            if "KRITIK" in status:
+                status_color = "#ca8a04" # Turuncu
+            if any(x in status for x in ["KRITIK", "MACUN", "ISLEMLI"]):
                 status_color = "#dc2626" # Kırmızı
 
             table_rows_html += f"""
@@ -92,20 +99,20 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
         <html>
         <head>
             <style>
-                body {{ font-family: Helvetica, Arial, sans-serif; color: #222; margin: 0; padding: 0; }}
+                body {{ font-family: Helvetica, Arial, sans-serif; color: #1e293b; padding: 0; margin: 0; }}
                 .header {{ text-align: center; background-color: #0f172a; color: white; padding: 20px; }}
-                .info-box {{ width: 100%; margin: 20px 0; border-collapse: collapse; }}
-                .info-box td {{ border: 1px solid #e2e8f0; padding: 12px; font-size: 10px; background: #f8fafc; }}
-                .section-title {{ background: #eff6ff; color: #1d4ed8; padding: 8px; font-weight: bold; border-left: 5px solid #1d4ed8; margin-top: 25px; font-size: 11px; }}
+                .info-box {{ width: 100%; border-collapse: collapse; margin: 15px 0; }}
+                .info-box td {{ border: 1px solid #e2e8f0; padding: 10px; font-size: 10px; background: #f8fafc; }}
+                .section-title {{ background: #eff6ff; color: #1d4ed8; padding: 8px; font-weight: bold; border-left: 5px solid #1d4ed8; margin-top: 20px; font-size: 11px; }}
                 .schema-div {{ text-align: center; padding: 20px; background: white; }}
-                .comment-box {{ background: #fff; border: 2px solid #e2e8f0; padding: 15px; font-size: 10px; line-height: 1.6; color: #334155; border-radius: 8px; }}
+                .comment-box {{ background: #fdfdfd; border: 1px solid #cbd5e1; padding: 15px; font-size: 10px; line-height: 1.6; color: #334155; border-radius: 6px; font-style: italic; }}
                 .footer {{ text-align: center; font-size: 9px; color: #64748b; margin-top: 40px; border-top: 1px solid #eee; padding-top: 10px; }}
             </style>
         </head>
         <body>
             <div class="header">
-                <h1 style="margin:0; font-size: 20px;">CARVIX AI EKSPERTIZ RAPORU</h1>
-                <p style="margin: 5px 0 0 0; font-size: 10px; opacity: 0.8;">Yapay Zeka Destekli Oto Ekspertiz Sistemi</p>
+                <h1 style="margin:0; font-size: 22px;">CARVIX AI EKSPERTIZ RAPORU</h1>
+                <p style="margin: 5px 0 0 0; font-size: 10px; opacity: 0.8;">Yapay Zeka ve Optik Analiz Teknolojisi</p>
             </div>
 
             <table class="info-box">
@@ -115,13 +122,14 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
                 </tr>
                 <tr>
                     <td><b>RAPOR ID:</b> {report_id}</td>
-                    <td><b>ARAC TIPI:</b> {vehicle_type}</td>
+                    <td><b>ARAC TIPI:</b> {config['label']}</td>
                 </tr>
             </table>
 
-            <div class="section-title">ARAC HASAR SEMASI</div>
+            <div class="section-title">TEKNIK HASAR SEMASI ({config['label']})</div>
             <div class="schema-div">
                 <img src="{config['schema']}" style="width: 320px;">
+                <p style="font-size: 8px; color: #94a3b8; margin-top: 5px;">* Sematik gosterim genel bilgilendirme amacli hazirlanmistir.</p>
             </div>
 
             <div class="section-title">DETAYLI EKSPERTIZ ANALIZI</div>
@@ -130,7 +138,7 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
                     <tr style="background: #334155; color: white;">
                         <th style="padding: 10px; font-size: 10px; text-align: left;">PARCA</th>
                         <th style="padding: 10px; font-size: 10px;">DURUM</th>
-                        <th style="padding: 10px; font-size: 10px; text-align: left;">AI ANALIZ NOTU</th>
+                        <th style="padding: 10px; font-size: 10px; text-align: left;">USTA ANALIZ NOTU</th>
                         <th style="padding: 10px; font-size: 10px;">GORSEL KANIT</th>
                     </tr>
                 </thead>
@@ -139,13 +147,13 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
                 </tbody>
             </table>
 
-            <div class="section-title">USTA YORUMU (QWEN AI ANALIZI)</div>
+            <div class="section-title">USTA OZET YORUMU (QWEN AI ANALIZI)</div>
             <div class="comment-box">
                 {ai_comment}
             </div>
 
             <div class="footer">
-                Bu rapor Carvix AI tarafından otomatik üretilmistir. <br>
+                Bu rapor dijital ortamda Carvix AI tarafindan olusturulmustur. <br>
                 <b>www.carvix.site</b>
             </div>
         </body>
@@ -169,9 +177,9 @@ def send_report_email(customer_email: str, flow_token: str, report_content: Any,
         msg = MIMEMultipart()
         msg['From'] = f"Carvix AI <{SENDER_EMAIL}>"
         msg['To'] = customer_email
-        msg['Subject'] = f"Carvix AI | Raporunuz Hazir ({report_content.get('plate', 'Analiz')})"
+        msg['Subject'] = f"Carvix AI | Ekspertiz Raporunuz Hazir ({report_content.get('plate', 'Analiz')})"
         
-        body = "Aracinizin yapay zeka destekli ekspertiz raporu tamamlanmistir. Detayli raporunuz ekteki PDF dosyasindadir."
+        body = "Aracinizin yapay zeka destekli ekspertiz raporu tamamlanmistir. Detaylar ekteki PDF dosyasindadir."
         msg.attach(MIMEText(body, 'plain'))
 
         pdf_data = create_pdf_report(flow_token, report_content, vehicle_type)
@@ -285,6 +293,7 @@ def submit_job_result(job_id: str, payload: Dict[str, Any]):
         flow.update({"status": "done", "report": payload})
         _save_json(FLOWS_PATH, flows)
         if flow.get("email"):
+            # Vehicle type buradan doğru bir şekilde aktarılıyor
             send_report_email(flow["email"], j["flow_token"], payload, flow.get("vehicle_type", "Otomobil"))
     _save_json(JOBS_PATH, jobs)
     return {"ok": True}
