@@ -181,8 +181,40 @@ async def submit_flow(flow_token: str, payload: Dict[str, Any] = Body(...)):
 # SHOPİER OSB CALLBACK
 @app.post("/shopier-callback")
 async def shopier_callback(request: Request):
-    # Shopier testi geçsin diye her şeye 'ok' diyoruz
-    return Response(content="success", status_code=200)
+    try:
+        form_data = await request.form()
+        data = dict(form_data)
+        
+        # Shopier'in gönderdiği platform_order_id bizim flow_token'ımızdır
+        flow_token = data.get("platform_order_id")
+        
+        if flow_token and flow_token in flows:
+            flow = flows[flow_token]
+            
+            # Ödeme bekleyen veya sıraya girmemiş işi kontrol et
+            if flow.get("status") == "waiting_payment" or not flow.get("paid"):
+                job_id = str(uuid.uuid4())
+                
+                # İşi Vast.ai'nin görebileceği kuyruğa (Jobs) ekliyoruz
+                jobs[job_id] = {
+                    "id": job_id, 
+                    "flow_token": flow_token, 
+                    "status": "queued"
+                }
+                
+                flow["status"] = "queued"
+                flow["paid"] = True
+                
+                _save_json(JOBS_PATH, jobs)
+                _save_json(FLOWS_PATH, flows)
+                
+                print(f">>> ÖDEME ONAYLANDI VE KUYRUĞA ALINDI: {flow_token}")
+                return Response(content="success", status_code=200)
+        
+        return Response(content="fail", status_code=400)
+    except Exception as e:
+        print(f"Callback Hatasi: {e}")
+        return Response(content="error", status_code=500)
 
 @app.get("/jobs/next")
 def get_next_job():
