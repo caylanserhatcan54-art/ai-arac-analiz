@@ -1,38 +1,21 @@
-import os, json, uuid, time, requests, smtplib, io, re
-import base64
-import json
+import os, json, uuid, time, requests, smtplib, io, re, base64
 from typing import List, Optional, Dict, Any
 from pathlib import Path
-
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
-
-# PDF Kütüphanesi
 from xhtml2pdf import pisa 
 
 load_dotenv()
 
 # =========================================================
-# KARAKTER VE METİN TEMİZLEME
-# =========================================================
-def clear_tr(text):
-    if not text: return ""
-    tr_map = str.maketrans("İıŞşĞğÇçÖöÜü", "IiSsGgCcOoUu")
-    return str(text).translate(tr_map)
-
-# =========================================================
-# ENV & AYARLAR
+# AYARLAR VE DIZINLER
 # =========================================================
 BASE_URL = os.getenv("BASE_URL", "https://ai-arac-analiz-backend.onrender.com").rstrip("/")
 SENDER_EMAIL = os.getenv("SENDER_EMAIL", "carvix.site@gmail.com")
 SENDER_PASSWORD = os.getenv("SENDER_PASSWORD", "bfgr qaqu upmy ifcy") 
-
-# Shopier Bilgileri
-SHOPIER_USER = "82e968ed5fc8210544588fc8cfd2000d"
-SHOPIER_PASS = "29583cd4b9b67ef31c71ec8ef16e8641"
 
 DATA_DIR = Path("./data")
 UPLOAD_DIR = Path("./uploads")
@@ -43,17 +26,22 @@ FLOWS_PATH = DATA_DIR / "flows.json"
 JOBS_PATH = DATA_DIR / "jobs.json"
 
 VEHICLE_CONFIGS = {
-    "Otomobil": {"base_img": "https://www.carvix.site/car-base.png", "label": "Binek Arac"},
-    "Motosiklet": {"base_img": "https://www.carvix.site/moto-base.png", "label": "Motosiklet"},
-    "Pickup": {"base_img": "https://www.carvix.site/pickup-base.png", "label": "Pickup / Kamyonet"},
-    "Van": {"base_img": "https://www.carvix.site/van-base.png", "label": "Ticari Arac"},
-    "ATV": {"base_img": "https://www.carvix.site/atv-base.png", "label": "ATV / Arazi Araci"},
-    "Elektrikli": {"base_img": "https://www.carvix.site/car-base.png", "label": "Elektrikli Arac"}
+    "Otomobil": {"schema": "https://www.carvix.site/car-schema.png", "label": "Binek Arac"},
+    "Motosiklet": {"schema": "https://www.carvix.site/moto-base.png", "label": "Motosiklet"},
+    "Pickup": {"schema": "https://www.carvix.site/pickup-base.png", "label": "Pickup / Kamyonet"},
+    "Van": {"schema": "https://www.carvix.site/van-base.png", "label": "Ticari Arac"},
+    "ATV": {"schema": "https://www.carvix.site/atv-base.png", "label": "ATV / Arazi Araci"},
+    "Elektrikli": {"schema": "https://www.carvix.site/car-base.png", "label": "Elektrikli Arac"}
 }
 
 # =========================================================
-# JSON YARDIMCILARI
+# YARDIMCI FONKSIYONLAR
 # =========================================================
+def clear_tr(text):
+    if not text: return ""
+    tr_map = str.maketrans("İıŞşĞğÇçÖöÜü", "IiSsGgCcOoUu")
+    return str(text).translate(tr_map)
+
 def _load_json(path: Path, default):
     if not path.exists(): return default
     try: return json.loads(path.read_text(encoding="utf-8"))
@@ -63,15 +51,17 @@ def _save_json(path: Path, data):
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 # =========================================================
-# QWEN YORUMLU VE PLAKALI PDF RAPOR ÜRETİCİ
+# ŞIK VE DETAYLI PDF RAPOR ÜRETİCİ
 # =========================================================
 def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Otomobil"):
     try:
         config = VEHICLE_CONFIGS.get(vehicle_type, VEHICLE_CONFIGS["Otomobil"])
         parts_analysis = report_data.get('parts_analysis', [])
-        ai_comment = clear_tr(report_data.get('ai_comment', "Analiz verileri yapay zeka tarafından işlendi."))
+        ai_comment = clear_tr(report_data.get('ai_comment', "Analiz verileri yapay zeka tarafından islendi."))
         plate = clear_tr(report_data.get('plate', 'TESPIT EDILEMEDI'))
-        
+        report_id = f"#{flow_token[:8].upper()}"
+        date_str = time.strftime("%d.%m.%Y %H:%M")
+
         table_rows_html = ""
         for p in parts_analysis:
             p_name = clear_tr(p['name']).replace("ANALIZ", "").replace("_", " ").strip()
@@ -79,26 +69,88 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
             note = clear_tr(p.get('note', '-'))
             img_url = p.get('image_url', '') 
             
-            status_color = "#16a34a" 
-            if any(x in status for x in ["KUSURLU", "BOYALI", "HASARLI", "DEGISEN"]):
-                status_color = "#ca8a04" 
+            # Durum Renkleri
+            status_color = "#16a34a" # Varsayılan Yeşil
+            if any(x in status for x in ["KUSURLU", "BOYALI", "HASARLI", "DEGISEN", "EZIK", "CIZIK"]):
+                status_color = "#ca8a04" # Turuncu/Sarı
             if "KRITIK" in status:
-                status_color = "#dc2626" 
+                status_color = "#dc2626" # Kırmızı
 
             table_rows_html += f"""
             <tr>
-                <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; font-weight: bold; font-size: 10px;">{p_name}</td>
-                <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; text-align: center;">
-                    <div style="color: white; background-color: {status_color}; padding: 4px; border-radius: 4px; font-weight: bold; font-size: 9px;">{status}</div>
+                <td style="padding: 10px; border-bottom: 1px solid #eee; font-size: 10px; font-weight: bold;">{p_name}</td>
+                <td style="padding: 10px; border-bottom: 1px solid #eee; text-align: center;">
+                    <div style="color: white; background-color: {status_color}; padding: 4px; border-radius: 4px; font-size: 8px; font-weight: bold;">{status}</div>
                 </td>
-                <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; font-size: 9px; color: #475569;">{note}</td>
-                <td style="padding: 5px; border-bottom: 1px solid #e2e8f0; text-align: center;">
-                    <img src="{img_url}" style="width: 110px; height: 70px; border: 1px solid #cbd5e1; border-radius: 4px;">
+                <td style="padding: 10px; border-bottom: 1px solid #eee; font-size: 9px; color: #444;">{note}</td>
+                <td style="padding: 5px; border-bottom: 1px solid #eee; text-align: center;">
+                    <img src="{img_url}" style="width: 100px; height: 60px; border-radius: 4px; border: 1px solid #ddd;">
                 </td>
             </tr>"""
 
-        html_template = f"""<html>...Rapor İçeriği...{table_rows_html}</html>""" # (Şablonun geri kalanı aynı)
+        html_template = f"""
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Helvetica, Arial, sans-serif; color: #222; margin: 0; padding: 0; }}
+                .header {{ text-align: center; background-color: #0f172a; color: white; padding: 20px; }}
+                .info-box {{ width: 100%; margin: 20px 0; border-collapse: collapse; }}
+                .info-box td {{ border: 1px solid #e2e8f0; padding: 12px; font-size: 10px; background: #f8fafc; }}
+                .section-title {{ background: #eff6ff; color: #1d4ed8; padding: 8px; font-weight: bold; border-left: 5px solid #1d4ed8; margin-top: 25px; font-size: 11px; }}
+                .schema-div {{ text-align: center; padding: 20px; background: white; }}
+                .comment-box {{ background: #fff; border: 2px solid #e2e8f0; padding: 15px; font-size: 10px; line-height: 1.6; color: #334155; border-radius: 8px; }}
+                .footer {{ text-align: center; font-size: 9px; color: #64748b; margin-top: 40px; border-top: 1px solid #eee; padding-top: 10px; }}
+            </style>
+        </head>
+        <body>
+            <div class="header">
+                <h1 style="margin:0; font-size: 20px;">CARVIX AI EKSPERTIZ RAPORU</h1>
+                <p style="margin: 5px 0 0 0; font-size: 10px; opacity: 0.8;">Yapay Zeka Destekli Oto Ekspertiz Sistemi</p>
+            </div>
 
+            <table class="info-box">
+                <tr>
+                    <td><b>PLAKA:</b> {plate}</td>
+                    <td><b>TARIH:</b> {date_str}</td>
+                </tr>
+                <tr>
+                    <td><b>RAPOR ID:</b> {report_id}</td>
+                    <td><b>ARAC TIPI:</b> {vehicle_type}</td>
+                </tr>
+            </table>
+
+            <div class="section-title">ARAC HASAR SEMASI</div>
+            <div class="schema-div">
+                <img src="{config['schema']}" style="width: 320px;">
+            </div>
+
+            <div class="section-title">DETAYLI EKSPERTIZ ANALIZI</div>
+            <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+                <thead>
+                    <tr style="background: #334155; color: white;">
+                        <th style="padding: 10px; font-size: 10px; text-align: left;">PARCA</th>
+                        <th style="padding: 10px; font-size: 10px;">DURUM</th>
+                        <th style="padding: 10px; font-size: 10px; text-align: left;">AI ANALIZ NOTU</th>
+                        <th style="padding: 10px; font-size: 10px;">GORSEL KANIT</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {table_rows_html}
+                </tbody>
+            </table>
+
+            <div class="section-title">USTA YORUMU (QWEN AI ANALIZI)</div>
+            <div class="comment-box">
+                {ai_comment}
+            </div>
+
+            <div class="footer">
+                Bu rapor Carvix AI tarafından otomatik üretilmistir. <br>
+                <b>www.carvix.site</b>
+            </div>
+        </body>
+        </html>
+        """
         result_file = io.BytesIO()
         pisa.CreatePDF(io.StringIO(html_template), dest=result_file)
         return result_file.getvalue()
@@ -106,7 +158,7 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
         print(f"PDF Hatasi: {e}"); return None
 
 # =========================================================
-# MAİL SERVİSİ
+# MAIL SERVISI
 # =========================================================
 def send_report_email(customer_email: str, flow_token: str, report_content: Any, vehicle_type: str):
     try:
@@ -117,9 +169,9 @@ def send_report_email(customer_email: str, flow_token: str, report_content: Any,
         msg = MIMEMultipart()
         msg['From'] = f"Carvix AI <{SENDER_EMAIL}>"
         msg['To'] = customer_email
-        msg['Subject'] = f"Carvix AI | Ekspertiz Raporunuz Hazir ({report_content.get('plate', 'Analiz')})"
+        msg['Subject'] = f"Carvix AI | Raporunuz Hazir ({report_content.get('plate', 'Analiz')})"
         
-        body = "Aracinizin yapay zeka destekli ekspertiz raporu tamamlanmistir. Detaylar ekteki PDF dosyasindadir."
+        body = "Aracinizin yapay zeka destekli ekspertiz raporu tamamlanmistir. Detayli raporunuz ekteki PDF dosyasindadir."
         msg.attach(MIMEText(body, 'plain'))
 
         pdf_data = create_pdf_report(flow_token, report_content, vehicle_type)
@@ -173,67 +225,45 @@ async def upload_images(flow_token: str, part_key: str = Form(...), files: List[
 async def submit_flow(flow_token: str, payload: Dict[str, Any] = Body(...)):
     flow = flows.get(flow_token)
     if not flow: raise HTTPException(404)
-    
     flow["email"] = payload.get("email")
-    # Önemli Değişiklik: İşi jobs'a eklemiyoruz, beklemeye alıyoruz.
     flow["status"] = "waiting_payment"
     _save_json(FLOWS_PATH, flows)
-    return {"ok": True, "message": "Payment required"}
+    return {"ok": True}
 
-# SHOPİER OSB CALLBACK
 @app.post("/shopier-callback")
 async def shopier_callback(request: Request):
     try:
         form_data = await request.form()
         data = dict(form_data)
-        
         res_encoded = data.get("res")
-        if not res_encoded:
-            return Response(content="fail", status_code=400)
+        if not res_encoded: return Response(content="fail", status_code=400)
 
         res_decoded = base64.b64decode(res_encoded).decode('utf-8')
         shopier_data = json.loads(res_decoded)
         
-        # 1. Verileri Ayıkla
-        s_order_id = str(shopier_data.get("orderid"))
         s_email = shopier_data.get("email")
         s_platform_id = shopier_data.get("platform_order_id")
         
         target_token = None
-
-        # 2. Eşleştirme Stratejisi
-        # Önce platform_order_id kontrol et
         if s_platform_id in flows:
             target_token = s_platform_id
-        # Bulamazsa email üzerinden en son oluşturulan flow'u bul
         else:
-            print(f"DEBUG: Token ile bulunamadi, Email aramasi yapiliyor: {s_email}")
             for token, f in reversed(list(flows.items())):
                 if f.get("email") == s_email and f.get("status") == "waiting_payment":
                     target_token = token
                     break
 
         if target_token:
-            flow = flows[target_token]
             job_id = str(uuid.uuid4())
             jobs[job_id] = {"id": job_id, "flow_token": target_token, "status": "queued"}
-            
-            flow["status"] = "queued"
-            flow["paid"] = True
-            flow["shopier_order_id"] = s_order_id # Takip için saklayalım
-            
+            flows[target_token].update({"status": "queued", "paid": True})
             _save_json(JOBS_PATH, jobs)
             _save_json(FLOWS_PATH, flows)
-            
-            print(f">>> BASARILI: {target_token} (Mail: {s_email}) onaylandi.")
+            print(f">>> ONAYLANDI: {target_token}")
             return Response(content="success", status_code=200)
-        else:
-            print(f"HATA: Hicbir flow ile eslesmedi. Mail: {s_email}, OrderID: {s_order_id}")
-            return Response(content="fail", status_code=400)
-            
+        return Response(content="fail", status_code=400)
     except Exception as e:
-        print(f"Callback Kritik Hata: {e}")
-        return Response(content="error", status_code=500)
+        print(f"Callback Hatasi: {e}"); return Response(content="error", status_code=500)
 
 @app.get("/jobs/next")
 def get_next_job():
@@ -249,12 +279,10 @@ def get_next_job():
 def submit_job_result(job_id: str, payload: Dict[str, Any]):
     j = jobs.get(job_id)
     if not j: return {"error": "Job not found"}
-    j["status"] = "done"
-    j["result"] = payload
+    j.update({"status": "done", "result": payload})
     flow = flows.get(j["flow_token"])
     if flow:
-        flow["status"] = "done"
-        flow["report"] = payload
+        flow.update({"status": "done", "report": payload})
         _save_json(FLOWS_PATH, flows)
         if flow.get("email"):
             send_report_email(flow["email"], j["flow_token"], payload, flow.get("vehicle_type", "Otomobil"))
