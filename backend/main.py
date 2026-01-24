@@ -1,4 +1,6 @@
 import os, json, uuid, time, requests, smtplib, io, re
+import base64
+import json
 from typing import List, Optional, Dict, Any
 from pathlib import Path
 
@@ -184,20 +186,55 @@ async def shopier_callback(request: Request):
     try:
         form_data = await request.form()
         data = dict(form_data)
-        print(f"DEBUG: Shopier'den Gelen Tum Veri: {data}") # Loglarda bunu göreceğiz
         
-        flow_token = data.get("platform_order_id")
+        # 1. Shopier'in gönderdiği şifreli 'res' verisini al
+        res_encoded = data.get("res")
+        if not res_encoded:
+            print("HATA: Shopier'den 'res' verisi gelmedi.")
+            return Response(content="fail", status_code=400)
+
+        # 2. Base64 şifresini çöz ve JSON'a çevir
+        try:
+            res_decoded = base64.b64decode(res_encoded).decode('utf-8')
+            shopier_data = json.loads(res_decoded)
+            print(f"DEBUG: Shopier Paket İcerigi: {shopier_data}")
+        except Exception as e:
+            print(f"HATA: Base64 decode edilemedi: {e}")
+            return Response(content="fail", status_code=400)
+
+        # 3. Bizim flow_token (platform_order_id) artık bu paketin içinde
+        # Shopier bazen platform_order_id bazen orderid olarak gönderir, ikisini de kontrol edelim
+        flow_token = shopier_data.get("platform_order_id") or shopier_data.get("orderid")
         print(f"DEBUG: Ayiklanan Flow Token: {flow_token}")
 
         if flow_token and flow_token in flows:
-            # ... (kuyruğa alma kodları aynı kalsın)
-            return Response(content="success", status_code=200)
+            flow = flows[flow_token]
+            
+            if flow.get("status") == "waiting_payment" or not flow.get("paid"):
+                job_id = str(uuid.uuid4())
+                jobs[job_id] = {
+                    "id": job_id, 
+                    "flow_token": flow_token, 
+                    "status": "queued"
+                }
+                
+                flow["status"] = "queued"
+                flow["paid"] = True
+                
+                _save_json(JOBS_PATH, jobs)
+                _save_json(FLOWS_PATH, flows)
+                
+                print(f">>> BASARILI: {flow_token} onaylandi ve Vast.ai kuyruguna alindi.")
+                return Response(content="success", status_code=200)
+            else:
+                print(f"BILGI: {flow_token} zaten isleme alinmis.")
+                return Response(content="success", status_code=200)
         else:
-            print(f"HATA: Token bulunamadi! Gelen: {flow_token}, Mevcut Tokenlar: {list(flows.keys())}")
+            print(f"HATA: Token flows.json icinde bulunamadi! Gelen: {flow_token}")
             return Response(content="fail", status_code=400)
             
     except Exception as e:
-        print(f"Callback Hatasi: {e}")
+        print(f"Callback Genel Hatasi: {e}")
         return Response(content="error", status_code=500)
 
 @app.get("/jobs/next")
