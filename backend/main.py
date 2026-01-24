@@ -11,11 +11,18 @@ from xhtml2pdf import pisa
 load_dotenv()
 
 # =========================================================
-# AYARLAR VE ARAÇ ŞEMALARI (GÜNCELLENMİŞ ŞEMALAR)
+# AYARLAR VE ARAÇ ŞEMALARI
 # =========================================================
 BASE_URL = os.getenv("BASE_URL", "https://ai-arac-analiz-backend.onrender.com").rstrip("/")
-SENDER_EMAIL = os.getenv("SENDER_EMAIL", "carvix.site@gmail.com")
-SENDER_PASSWORD = os.getenv("SENDER_PASSWORD", "bfgr qaqu upmy ifcy") 
+
+# --- GÜNCELLENMİŞ MAİL HAVUZU ---
+MAIL_POOL = [
+    {"email": "carvix.site@gmail.com", "pass": "bfgrqaquupmyifcy"},
+    {"email": "carvixrapor@gmail.com", "pass": "uoduqgunxdickfxr"},
+    {"email": "raporcarvix@gmail.com", "pass": "dqdjjfkadhuvcsix"},
+    {"email": "sitecarvix@gmail.com", "pass": "bnazyzrkxobqhjkp"}
+]
+current_mail_index = 0
 
 DATA_DIR = Path("./data")
 UPLOAD_DIR = Path("./uploads")
@@ -25,7 +32,6 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 FLOWS_PATH = DATA_DIR / "flows.json"
 JOBS_PATH = DATA_DIR / "jobs.json"
 
-# Şemalar (Dosya adları senin belirttiğin web/public altındaki yeni isimlerle güncellendi)
 VEHICLE_CONFIGS = {
     "Otomobil": {"schema": "https://www.carvix.site/car-base.png", "label": "Binek Arac"},
     "Motosiklet": {"schema": "https://www.carvix.site/moto-base.png", "label": "Motosiklet"},
@@ -52,15 +58,13 @@ def _save_json(path: Path, data):
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 # =========================================================
-# ŞIK, ŞEMALI VE USTA YORUMLU PDF ÜRETİCİ
+# PDF ÜRETİCİ
 # =========================================================
 def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Otomobil"):
     try:
-        # Araç tipine göre doğru şemayı seçer (Eşleşme hatasını giderir)
         config = VEHICLE_CONFIGS.get(vehicle_type, VEHICLE_CONFIGS["Otomobil"])
         parts_analysis = report_data.get('parts_analysis', [])
         
-        # Usta Yorumu Filtreleme (Saçmalamaları ve bot gibi konuşmayı temizler)
         raw_comment = report_data.get('ai_comment', "Teknik analiz yapildi.")
         ai_comment = clear_tr(raw_comment).replace("Yapay zeka analizime gore", "Yapilan teknik inceleme sonucunda;")
         ai_comment = ai_comment.replace("Selam,", "").replace("Merhaba,", "").strip()
@@ -76,12 +80,11 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
             note = clear_tr(p.get('note', '-'))
             img_url = p.get('image_url', '') 
             
-            # Durum Renkleri
-            status_color = "#16a34a" # Yeşil
+            status_color = "#16a34a" 
             if any(x in status for x in ["KUSURLU", "BOYALI", "HASARLI", "DEGISEN", "EZIK", "CIZIK"]):
-                status_color = "#ca8a04" # Turuncu
+                status_color = "#ca8a04" 
             if any(x in status for x in ["KRITIK", "MACUN", "ISLEMLI"]):
-                status_color = "#dc2626" # Kırmızı
+                status_color = "#dc2626" 
 
             table_rows_html += f"""
             <tr>
@@ -114,24 +117,12 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
                 <h1 style="margin:0; font-size: 22px;">CARVIX AI EKSPERTIZ RAPORU</h1>
                 <p style="margin: 5px 0 0 0; font-size: 10px; opacity: 0.8;">Yapay Zeka ve Optik Analiz Teknolojisi</p>
             </div>
-
             <table class="info-box">
-                <tr>
-                    <td><b>PLAKA:</b> {plate}</td>
-                    <td><b>TARIH:</b> {date_str}</td>
-                </tr>
-                <tr>
-                    <td><b>RAPOR ID:</b> {report_id}</td>
-                    <td><b>ARAC TIPI:</b> {config['label']}</td>
-                </tr>
+                <tr><td><b>PLAKA:</b> {plate}</td><td><b>TARIH:</b> {date_str}</td></tr>
+                <tr><td><b>RAPOR ID:</b> {report_id}</td><td><b>ARAC TIPI:</b> {config['label']}</td></tr>
             </table>
-
             <div class="section-title">TEKNIK HASAR SEMASI ({config['label']})</div>
-            <div class="schema-div">
-                <img src="{config['schema']}" style="width: 320px;">
-                <p style="font-size: 8px; color: #94a3b8; margin-top: 5px;">* Sematik gosterim genel bilgilendirme amacli hazirlanmistir.</p>
-            </div>
-
+            <div class="schema-div"><img src="{config['schema']}" style="width: 320px;"></div>
             <div class="section-title">DETAYLI EKSPERTIZ ANALIZI</div>
             <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
                 <thead>
@@ -142,20 +133,11 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
                         <th style="padding: 10px; font-size: 10px;">GORSEL KANIT</th>
                     </tr>
                 </thead>
-                <tbody>
-                    {table_rows_html}
-                </tbody>
+                <tbody>{table_rows_html}</tbody>
             </table>
-
-            <div class="section-title">USTA OZET YORUMU (QWEN AI ANALIZI)</div>
-            <div class="comment-box">
-                {ai_comment}
-            </div>
-
-            <div class="footer">
-                Bu rapor dijital ortamda Carvix AI tarafindan olusturulmustur. <br>
-                <b>www.carvix.site</b>
-            </div>
+            <div class="section-title">USTA OZET YORUMU</div>
+            <div class="comment-box">{ai_comment}</div>
+            <div class="footer">www.carvix.site</div>
         </body>
         </html>
         """
@@ -166,16 +148,21 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
         print(f"PDF Hatasi: {e}"); return None
 
 # =========================================================
-# MAIL SERVISI
+# MAIL SERVISI (YUK DENGELEMELI)
 # =========================================================
 def send_report_email(customer_email: str, flow_token: str, report_content: Any, vehicle_type: str):
+    global current_mail_index
     try:
         from email.mime.multipart import MIMEMultipart
         from email.mime.text import MIMEText
         from email.mime.application import MIMEApplication
 
+        # Havuzdan siradaki hesabi sec
+        acc = MAIL_POOL[current_mail_index]
+        current_mail_index = (current_mail_index + 1) % len(MAIL_POOL)
+
         msg = MIMEMultipart()
-        msg['From'] = f"Carvix AI <{SENDER_EMAIL}>"
+        msg['From'] = f"Carvix AI <{acc['email']}>"
         msg['To'] = customer_email
         msg['Subject'] = f"Carvix AI | Ekspertiz Raporunuz Hazir ({report_content.get('plate', 'Analiz')})"
         
@@ -189,11 +176,12 @@ def send_report_email(customer_email: str, flow_token: str, report_content: Any,
             msg.attach(attachment)
 
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(SENDER_EMAIL, SENDER_PASSWORD)
+            server.login(acc["email"], acc["pass"])
             server.send_message(msg)
+        print(f"DEBUG: Rapor {acc['email']} uzerinden gonderildi.")
         return True
     except Exception as e:
-        print(f"Mail Hatasi: {e}"); return False
+        print(f"Mail Hatasi ({acc['email']}): {e}"); return False
 
 # =========================================================
 # FASTAPI ENDPOINTS
@@ -220,12 +208,10 @@ async def upload_images(flow_token: str, part_key: str = Form(...), files: List[
     flow = flows.get(flow_token)
     if not flow: raise HTTPException(404)
     if part_key not in flow["parts"]: flow["parts"][part_key] = []
-    
     for f in files:
         stored_name = f"{uuid.uuid4()}{os.path.splitext(f.filename)[1]}"
         (UPLOAD_DIR / stored_name).write_bytes(await f.read())
         flow["parts"][part_key].append(f"{BASE_URL}/uploads/{stored_name}")
-    
     _save_json(FLOWS_PATH, flows)
     return {"ok": True}
 
@@ -245,13 +231,10 @@ async def shopier_callback(request: Request):
         data = dict(form_data)
         res_encoded = data.get("res")
         if not res_encoded: return Response(content="fail", status_code=400)
-
         res_decoded = base64.b64decode(res_encoded).decode('utf-8')
         shopier_data = json.loads(res_decoded)
-        
         s_email = shopier_data.get("email")
         s_platform_id = shopier_data.get("platform_order_id")
-        
         target_token = None
         if s_platform_id in flows:
             target_token = s_platform_id
@@ -260,14 +243,12 @@ async def shopier_callback(request: Request):
                 if f.get("email") == s_email and f.get("status") == "waiting_payment":
                     target_token = token
                     break
-
         if target_token:
             job_id = str(uuid.uuid4())
             jobs[job_id] = {"id": job_id, "flow_token": target_token, "status": "queued"}
             flows[target_token].update({"status": "queued", "paid": True})
             _save_json(JOBS_PATH, jobs)
             _save_json(FLOWS_PATH, flows)
-            print(f">>> ONAYLANDI: {target_token}")
             return Response(content="success", status_code=200)
         return Response(content="fail", status_code=400)
     except Exception as e:
@@ -293,7 +274,6 @@ def submit_job_result(job_id: str, payload: Dict[str, Any]):
         flow.update({"status": "done", "report": payload})
         _save_json(FLOWS_PATH, flows)
         if flow.get("email"):
-            # Vehicle type buradan doğru bir şekilde aktarılıyor
             send_report_email(flow["email"], j["flow_token"], payload, flow.get("vehicle_type", "Otomobil"))
     _save_json(JOBS_PATH, jobs)
     return {"ok": True}
