@@ -15,7 +15,6 @@ load_dotenv()
 # =========================================================
 BASE_URL = os.getenv("BASE_URL", "https://ai-arac-analiz-backend.onrender.com").rstrip("/")
 
-# --- GÜNCELLENMİŞ MAİL HAVUZU ---
 MAIL_POOL = [
     {"email": "carvix.site@gmail.com", "pass": "bfgrqaquupmyifcy"},
     {"email": "carvixrapor@gmail.com", "pass": "uoduqgunxdickfxr"},
@@ -58,12 +57,14 @@ def _save_json(path: Path, data):
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 # =========================================================
-# PDF ÜRETİCİ
+# PDF ÜRETİCİ (GÜNCELLENDİ: GÜVEN SKORU VE REDDEDİLENLER EKLENDİ)
 # =========================================================
 def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Otomobil"):
     try:
         config = VEHICLE_CONFIGS.get(vehicle_type, VEHICLE_CONFIGS["Otomobil"])
         parts_analysis = report_data.get('parts_analysis', [])
+        rejected_images = report_data.get('rejected_images', []) # Yeni eklendi
+        ai_confidence = report_data.get('ai_confidence', 0) # Yeni eklendi
         
         raw_comment = report_data.get('ai_comment', "Teknik analiz yapildi.")
         ai_comment = clear_tr(raw_comment).replace("Yapay zeka analizime gore", "Yapilan teknik inceleme sonucunda;")
@@ -73,6 +74,7 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
         report_id = f"#{flow_token[:8].upper()}"
         date_str = time.strftime("%d.%m.%Y %H:%M")
 
+        # Parça Analiz Satırları
         table_rows_html = ""
         for p in parts_analysis:
             p_name = clear_tr(p['name']).replace("ANALIZ", "").replace("_", " ").strip()
@@ -98,6 +100,14 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
                 </td>
             </tr>"""
 
+        # Reddedilen Görseller Listesi (Eğer varsa)
+        rejected_html = ""
+        if rejected_images:
+            rejected_html = '<div class="section-title" style="background:#fff1f2; color:#be123c; border-left-color:#be123c;"> ANALIZE UYGUN GORULMEYEN GORSELLER</div><ul>'
+            for r in rejected_images:
+                rejected_html += f'<li style="font-size:9px; color:#be123c; margin-bottom:3px;"><b>{clear_tr(r.get("part",""))}:</b> {clear_tr(r.get("reason",""))}</li>'
+            rejected_html += '</ul>'
+
         html_template = f"""
         <html>
         <head>
@@ -110,6 +120,7 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
                 .schema-div {{ text-align: center; padding: 20px; background: white; }}
                 .comment-box {{ background: #fdfdfd; border: 1px solid #cbd5e1; padding: 15px; font-size: 10px; line-height: 1.6; color: #334155; border-radius: 6px; font-style: italic; }}
                 .footer {{ text-align: center; font-size: 9px; color: #64748b; margin-top: 40px; border-top: 1px solid #eee; padding-top: 10px; }}
+                .confidence-badge {{ display: inline-block; background: #22c55e; color: white; padding: 2px 6px; border-radius: 10px; font-size: 9px; margin-left: 10px; }}
             </style>
         </head>
         <body>
@@ -119,10 +130,11 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
             </div>
             <table class="info-box">
                 <tr><td><b>PLAKA:</b> {plate}</td><td><b>TARIH:</b> {date_str}</td></tr>
-                <tr><td><b>RAPOR ID:</b> {report_id}</td><td><b>ARAC TIPI:</b> {config['label']}</td></tr>
+                <tr><td><b>RAPOR ID:</b> {report_id}</td><td><b>ANALIZ GUVENI:</b> <span class="confidence-badge">%{ai_confidence}</span></td></tr>
             </table>
             <div class="section-title">TEKNIK HASAR SEMASI ({config['label']})</div>
             <div class="schema-div"><img src="{config['schema']}" style="width: 320px;"></div>
+            
             <div class="section-title">DETAYLI EKSPERTIZ ANALIZI</div>
             <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
                 <thead>
@@ -135,6 +147,9 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
                 </thead>
                 <tbody>{table_rows_html}</tbody>
             </table>
+
+            {rejected_html}
+
             <div class="section-title">USTA OZET YORUMU</div>
             <div class="comment-box">{ai_comment}</div>
             <div class="footer">www.carvix.site</div>
@@ -147,8 +162,10 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
     except Exception as e:
         print(f"PDF Hatasi: {e}"); return None
 
+# ... (send_report_email, FastAPI app ayarları, create_flow, upload_images, submit_flow, shopier_callback fonksiyonları aynen kalıyor) ...
+
 # =========================================================
-# MAIL SERVISI (YUK DENGELEMELI)
+# MAIL SERVISI (DOKUNULMADI)
 # =========================================================
 def send_report_email(customer_email: str, flow_token: str, report_content: Any, vehicle_type: str):
     global current_mail_index
@@ -157,7 +174,6 @@ def send_report_email(customer_email: str, flow_token: str, report_content: Any,
         from email.mime.text import MIMEText
         from email.mime.application import MIMEApplication
 
-        # Havuzdan siradaki hesabi sec
         acc = MAIL_POOL[current_mail_index]
         current_mail_index = (current_mail_index + 1) % len(MAIL_POOL)
 
@@ -178,13 +194,12 @@ def send_report_email(customer_email: str, flow_token: str, report_content: Any,
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(acc["email"], acc["pass"])
             server.send_message(msg)
-        print(f"DEBUG: Rapor {acc['email']} uzerinden gonderildi.")
         return True
     except Exception as e:
         print(f"Mail Hatasi ({acc['email']}): {e}"); return False
 
 # =========================================================
-# FASTAPI ENDPOINTS
+# FASTAPI ENDPOINTS (GELİŞTİRİLDİ)
 # =========================================================
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -274,6 +289,7 @@ def submit_job_result(job_id: str, payload: Dict[str, Any]):
         flow.update({"status": "done", "report": payload})
         _save_json(FLOWS_PATH, flows)
         if flow.get("email"):
+            # Payload içindeki yeni verilerle (güven skoru vb.) raporu gönderir
             send_report_email(flow["email"], j["flow_token"], payload, flow.get("vehicle_type", "Otomobil"))
     _save_json(JOBS_PATH, jobs)
     return {"ok": True}
