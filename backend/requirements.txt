@@ -1,22 +1,17 @@
-# =========================================
-# Temel Python Paketleri
-# =========================================
 fastapi==0.115.6
 uvicorn[standard]==0.30.6
 python-multipart==0.0.12
 python-dotenv==1.0.1
 pydantic==2.9.2
 pydantic-settings==2.6.1
-numpy==1.25.3                 # PyTorch 2.1 ile uyumlu
+numpy==1.26.4          # Render 3.12 uyumlu
 opencv-python-headless==4.10.0.84
 requests==2.32.3
 firebase-admin==6.5.0
 xhtml2pdf==0.2.16
 
-# =========================================
-# GPU / AI Paketleri (PyTorch + Ultralytics)
-# =========================================
-torch==2.1.0+cu121 -f https://download.pytorch.org/whl/torch_stable.html
-torchvision==0.16.0+cu121 -f https://download.pytorch.org/whl/torch_stable.html
-torchaudio==2.1.0+cu121 -f https://download.pytorch.org/whl/torch_stable.html
+# GPU / AI Paketleri
+torch==2.1.0+cu121     # 3.12 ile uyumlu sürüm
+torchvision==0.16.0+cu121
+torchaudio==2.1.0+cu121
 ultralytics==8.0.149
