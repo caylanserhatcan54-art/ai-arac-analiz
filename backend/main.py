@@ -57,14 +57,14 @@ def _save_json(path: Path, data):
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 # =========================================================
-# PDF ÜRETİCİ (GÜNCELLENDİ: GÜVEN SKORU VE REDDEDİLENLER EKLENDİ)
+# PDF ÜRETİCİ (DÜZELTİLDİ)
 # =========================================================
 def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Otomobil"):
     try:
         config = VEHICLE_CONFIGS.get(vehicle_type, VEHICLE_CONFIGS["Otomobil"])
         parts_analysis = report_data.get('parts_analysis', [])
-        rejected_images = report_data.get('rejected_images', []) # Yeni eklendi
-        ai_confidence = report_data.get('ai_confidence', 0) # Yeni eklendi
+        rejected_images = report_data.get('rejected_images', [])
+        ai_confidence = report_data.get('ai_confidence', 0)
         
         raw_comment = report_data.get('ai_comment', "Teknik analiz yapildi.")
         ai_comment = clear_tr(raw_comment).replace("Yapay zeka analizime gore", "Yapilan teknik inceleme sonucunda;")
@@ -100,7 +100,7 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
                 </td>
             </tr>"""
 
-        # Reddedilen Görseller Listesi (Eğer varsa)
+        # Reddedilen Görseller Listesi
         rejected_html = ""
         if rejected_images:
             rejected_html = '<div class="section-title" style="background:#fff1f2; color:#be123c; border-left-color:#be123c;"> ANALIZE UYGUN GORULMEYEN GORSELLER</div><ul>'
@@ -156,13 +156,20 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
         </body>
         </html>
         """
-        result_file = io.BytesIO()
-        pisa.CreatePDF(io.StringIO(html_template), dest=result_file)
-        return result_file.getvalue()
-    except Exception as e:
-        print(f"PDF Hatasi: {e}"); return None
 
-# ... (send_report_email, FastAPI app ayarları, create_flow, upload_images, submit_flow, shopier_callback fonksiyonları aynen kalıyor) ...
+        # =========================================================
+        # DÜZELTİLMİŞ PDF OLUŞTURMA
+        # =========================================================
+        result_file = io.BytesIO()
+        pisa_status = pisa.CreatePDF(src=html_template, dest=result_file)
+        if pisa_status.err:
+            print("PDF oluşturulurken hata oluştu:", pisa_status.err)
+            return None
+        return result_file.getvalue()
+
+    except Exception as e:
+        print(f"PDF Hatasi: {e}")
+        return None
 
 # =========================================================
 # MAIL SERVISI (DOKUNULMADI)
@@ -289,7 +296,6 @@ def submit_job_result(job_id: str, payload: Dict[str, Any]):
         flow.update({"status": "done", "report": payload})
         _save_json(FLOWS_PATH, flows)
         if flow.get("email"):
-            # Payload içindeki yeni verilerle (güven skoru vb.) raporu gönderir
             send_report_email(flow["email"], j["flow_token"], payload, flow.get("vehicle_type", "Otomobil"))
     _save_json(JOBS_PATH, jobs)
     return {"ok": True}
