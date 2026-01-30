@@ -75,31 +75,35 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
         date_str = time.strftime("%d.%m.%Y %H:%M")
 
         # Parça Analiz Satırları
-        table_rows_html = ""
-        for p in parts_analysis:
-            p_name = clear_tr(p['name']).replace("ANALIZ", "").replace("_", " ").strip()
-            status = clear_tr(p['status']).upper()
-            note = clear_tr(p.get('note', '-'))
-            img_url = p.get('image_url', '') 
-            
-            status_color = "#16a34a" 
-            if any(x in status for x in ["KUSURLU", "BOYALI", "HASARLI", "DEGISEN", "EZIK", "CIZIK"]):
-                status_color = "#ca8a04" 
-            if any(x in status for x in ["KRITIK", "MACUN", "ISLEMLI"]):
-                status_color = "#dc2626" 
+table_rows_html = ""
+for p in parts_analysis:
+    p_name = clear_tr(p.get('name','')).replace("ANALIZ", "").replace("_", " ").strip()
+    p_status = clear_tr(p.get('status','')).strip().upper()
+    note = clear_tr(p.get('note', '-'))
+    img_url = p.get('image_url', '')
 
-            table_rows_html += f"""
-            <tr>
-                <td style="padding: 10px; border-bottom: 1px solid #eee; font-size: 10px; font-weight: bold;">{p_name}</td>
-                <td style="padding: 10px; border-bottom: 1px solid #eee; text-align: center;">
-                    <div style="color: white; background-color: {status_color}; padding: 4px; border-radius: 4px; font-size: 8px; font-weight: bold;">{status}</div>
-                </td>
-                <td style="padding: 10px; border-bottom: 1px solid #eee; font-size: 9px; color: #444;">{note}</td>
-                <td style="padding: 5px; border-bottom: 1px solid #eee; text-align: center;">
-                    <img src="{img_url}" style="width: 100px; height: 60px; border-radius: 4px; border: 1px solid #ddd;">
-                </td>
-            </tr>"""
+    # Duruma göre renk belirleme
+    if p_status in ["KUSURLU", "BOYALI", "HASARLI", "DEGISEN", "EZIK", "CIZIK"]:
+        status_color = "#ca8a04"  # turuncu
+    elif p_status in ["KRITIK", "MACUN", "ISLEMLI"]:
+        status_color = "#dc2626"  # kırmızı
+    elif p_status in ["ORJINAL", "ORIGINAL"]:
+        status_color = "#16a34a"  # yeşil
+    else:
+        status_color = "#64748b"  # gri - bilinmeyen
+        p_status = "BİLGİ YOK"
 
+    table_rows_html += f"""
+    <tr>
+        <td style="padding: 10px; border-bottom: 1px solid #eee; font-size: 10px; font-weight: bold;">{p_name}</td>
+        <td style="padding: 10px; border-bottom: 1px solid #eee; text-align: center;">
+            <div style="color: white; background-color: {status_color}; padding: 4px; border-radius: 4px; font-size: 8px; font-weight: bold;">{p_status}</div>
+        </td>
+        <td style="padding: 10px; border-bottom: 1px solid #eee; font-size: 9px; color: #444;">{note}</td>
+        <td style="padding: 5px; border-bottom: 1px solid #eee; text-align: center;">
+            <img src="{img_url}" style="width: 100px; height: 60px; border-radius: 4px; border: 1px solid #ddd;">
+        </td>
+    </tr>"""
         # Reddedilen Görseller Listesi
         rejected_html = ""
         if rejected_images:
