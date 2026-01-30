@@ -1,11 +1,22 @@
+# Temel Sunucu ve API
 fastapi==0.115.6
 uvicorn[standard]==0.30.6
 python-multipart==0.0.12
 python-dotenv==1.0.1
+
+# Veri Doğrulama ve Ayarlar
 pydantic==2.9.2
 pydantic-settings==2.6.1
+
+# Görüntü İşleme (Backend tarafında görsel boyutlandırma vb. için)
 numpy==2.1.3
 opencv-python-headless==4.10.0.84
 requests==2.32.3
-firebase-admin==6.5.0
+
+# Raporlama ve PDF
+# NOT: xhtml2pdf bazen raporlardaki tabloları düzgün basmak için 'reportlab' ister.
 xhtml2pdf==0.2.16
+reportlab==4.2.5
+
+# Opsiyonel: Eğer ileride Firebase kullanacaksan kalsın
+firebase-admin==6.5.0

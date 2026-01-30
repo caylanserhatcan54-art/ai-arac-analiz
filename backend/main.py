@@ -44,8 +44,10 @@ VEHICLE_CONFIGS = {
 # =========================================================
 def clear_tr(text):
     if not text: return ""
+    # Usta Notu içindeki yeni satırları PDF uyumu için <br/> yapıyoruz
+    text = str(text).replace("\n", "<br/>")
     tr_map = str.maketrans("İıŞşĞğÇçÖöÜü", "IiSsGgCcOoUu")
-    return str(text).translate(tr_map)
+    return text.translate(tr_map)
 
 def _load_json(path: Path, default):
     if not path.exists(): return default
@@ -56,7 +58,7 @@ def _save_json(path: Path, data):
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 # =========================================================
-# PDF ÜRETİCİ
+# PDF ÜRETİCİ (Worker'ın Yeni "Zengin" Verilerine Göre)
 # =========================================================
 def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Otomobil"):
     try:
@@ -67,8 +69,7 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
         
         raw_comment = report_data.get('ai_comment', "Teknik analiz yapildi.")
         ai_comment = clear_tr(raw_comment).replace("Yapay zeka analizime gore", "Yapilan teknik inceleme sonucunda;")
-        ai_comment = ai_comment.replace("Selam,", "").replace("Merhaba,", "").strip()
-
+        
         plate = clear_tr(report_data.get('plate', 'TESPIT EDILEMEDI'))
         report_id = f"#{flow_token[:8].upper()}"
         date_str = time.strftime("%d.%m.%Y %H:%M")
@@ -77,31 +78,34 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
         for p in parts_analysis:
             p_name = clear_tr(p.get('name','')).replace("ANALIZ", "").replace("_", " ").strip()
             p_status = clear_tr(p.get('status','')).strip().upper()
-            note = clear_tr(p.get('note', '-'))
+            
+            # Worker'dan gelen o detaylı "technical_note" verisini alıyoruz
+            note = clear_tr(p.get('note', '-')) 
             img_url = p.get('image_url', '')
 
-            if p_status in ["KUSURLU", "BOYALI", "HASARLI", "DEGISEN", "EZIK", "CIZIK"]:
-                status_color = "#ca8a04"
-            elif p_status in ["KRITIK", "MACUN", "ISLEMLI"]:
-                status_color = "#dc2626"
-            elif p_status in ["ORJINAL", "ORIGINAL"]:
-                status_color = "#16a34a"
+            # Dinamik Renk Belirleme
+            if any(x in p_status for x in ["BOYALI", "ISLEMLI", "GOCUK", "KUSUR", "SUPHE"]):
+                status_color = "#ca8a04" # Turuncu/Sarı
+            elif any(x in p_status for x in ["AGIR", "KRITIK", "HASAR", "KIRIK"]):
+                status_color = "#dc2626" # Kırmızı
+            elif "ORJINAL" in p_status:
+                status_color = "#16a34a" # Yeşil
             else:
-                status_color = "#64748b"
-                p_status = "BİLGİ YOK"
+                status_color = "#64748b" # Gri
 
             table_rows_html += f"""
             <tr>
-                <td style="padding: 10px; border-bottom: 1px solid #eee; font-size: 10px; font-weight: bold;">{p_name}</td>
-                <td style="padding: 10px; border-bottom: 1px solid #eee; text-align: center;">
-                    <div style="color: white; background-color: {status_color}; padding: 4px; border-radius: 4px; font-size: 8px; font-weight: bold;">{p_status}</div>
+                <td style="padding: 8px; border-bottom: 1px solid #eee; font-size: 10px; font-weight: bold;">{p_name}</td>
+                <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">
+                    <div style="color: white; background-color: {status_color}; padding: 4px; border-radius: 4px; font-size: 7px; font-weight: bold;">{p_status}</div>
                 </td>
-                <td style="padding: 10px; border-bottom: 1px solid #eee; font-size: 9px; color: #444;">{note}</td>
+                <td style="padding: 8px; border-bottom: 1px solid #eee; font-size: 8px; color: #334155; line-height: 1.3;">{note}</td>
                 <td style="padding: 5px; border-bottom: 1px solid #eee; text-align: center;">
-                    <img src="{img_url}" style="width: 100px; height: 60px; border-radius: 4px; border: 1px solid #ddd;">
+                    <img src="{img_url}" style="width: 110px; height: 70px; border-radius: 4px; border: 1px solid #ddd;">
                 </td>
             </tr>"""
 
+        # Reddedilen Görseller (Varsa)
         rejected_html = ""
         if rejected_images:
             rejected_html = '<div class="section-title" style="background:#fff1f2; color:#be123c; border-left-color:#be123c;"> ANALIZE UYGUN GORULMEYEN GORSELLER</div><ul>'
@@ -114,36 +118,37 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
         <head>
             <style>
                 body {{ font-family: Helvetica, Arial, sans-serif; color: #1e293b; padding: 0; margin: 0; }}
-                .header {{ text-align: center; background-color: #0f172a; color: white; padding: 20px; }}
-                .info-box {{ width: 100%; border-collapse: collapse; margin: 15px 0; }}
-                .info-box td {{ border: 1px solid #e2e8f0; padding: 10px; font-size: 10px; background: #f8fafc; }}
-                .section-title {{ background: #eff6ff; color: #1d4ed8; padding: 8px; font-weight: bold; border-left: 5px solid #1d4ed8; margin-top: 20px; font-size: 11px; }}
-                .schema-div {{ text-align: center; padding: 20px; background: white; }}
-                .comment-box {{ background: #fdfdfd; border: 1px solid #cbd5e1; padding: 15px; font-size: 10px; line-height: 1.6; color: #334155; border-radius: 6px; font-style: italic; }}
-                .footer {{ text-align: center; font-size: 9px; color: #64748b; margin-top: 40px; border-top: 1px solid #eee; padding-top: 10px; }}
-                .confidence-badge {{ display: inline-block; background: #22c55e; color: white; padding: 2px 6px; border-radius: 10px; font-size: 9px; margin-left: 10px; }}
+                .header {{ text-align: center; background-color: #0f172a; color: white; padding: 15px; }}
+                .info-box {{ width: 100%; border-collapse: collapse; margin: 10px 0; }}
+                .info-box td {{ border: 1px solid #e2e8f0; padding: 8px; font-size: 9px; background: #f8fafc; }}
+                .section-title {{ background: #eff6ff; color: #1d4ed8; padding: 6px; font-weight: bold; border-left: 4px solid #1d4ed8; margin-top: 15px; font-size: 10px; }}
+                .schema-div {{ text-align: center; padding: 15px; background: white; }}
+                .comment-box {{ background: #fdfdfd; border: 1px solid #cbd5e1; padding: 12px; font-size: 9px; line-height: 1.5; color: #334155; border-radius: 6px; }}
+                .footer {{ text-align: center; font-size: 8px; color: #64748b; margin-top: 30px; border-top: 1px solid #eee; padding-top: 10px; }}
+                .confidence-badge {{ display: inline-block; background: #22c55e; color: white; padding: 2px 5px; border-radius: 8px; font-size: 8px; }}
             </style>
         </head>
         <body>
             <div class="header">
-                <h1 style="margin:0; font-size: 22px;">CARVIX AI EKSPERTIZ RAPORU</h1>
-                <p style="margin: 5px 0 0 0; font-size: 10px; opacity: 0.8;">Yapay Zeka ve Optik Analiz Teknolojisi</p>
+                <h1 style="margin:0; font-size: 20px;">CARVIX AI EKSPERTIZ RAPORU</h1>
+                <p style="margin: 3px 0 0 0; font-size: 9px; opacity: 0.8;">Yapay Zeka Destekli Mikroskobik Doku Analizi</p>
             </div>
             <table class="info-box">
                 <tr><td><b>PLAKA:</b> {plate}</td><td><b>TARIH:</b> {date_str}</td></tr>
-                <tr><td><b>RAPOR ID:</b> {report_id}</td><td><b>ANALIZ GUVENI:</b> <span class="confidence-badge">%{ai_confidence}</span></td></tr>
+                <tr><td><b>RAPOR ID:</b> {report_id}</td><td><b>SISTEM GUVENI:</b> <span class="confidence-badge">%{ai_confidence}</span></td></tr>
             </table>
+            
             <div class="section-title">TEKNIK HASAR SEMASI ({config['label']})</div>
-            <div class="schema-div"><img src="{config['schema']}" style="width: 320px;"></div>
+            <div class="schema-div"><img src="{config['schema']}" style="width: 280px;"></div>
             
             <div class="section-title">DETAYLI EKSPERTIZ ANALIZI</div>
-            <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+            <table style="width: 100%; border-collapse: collapse; margin-top: 8px;">
                 <thead>
                     <tr style="background: #334155; color: white;">
-                        <th style="padding: 10px; font-size: 10px; text-align: left;">PARCA</th>
-                        <th style="padding: 10px; font-size: 10px;">DURUM</th>
-                        <th style="padding: 10px; font-size: 10px; text-align: left;">USTA ANALIZ NOTU</th>
-                        <th style="padding: 10px; font-size: 10px;">GORSEL KANIT</th>
+                        <th style="padding: 8px; font-size: 9px; text-align: left; width: 20%;">PARCA</th>
+                        <th style="padding: 8px; font-size: 9px; width: 15%;">DURUM</th>
+                        <th style="padding: 8px; font-size: 9px; text-align: left; width: 40%;">TEKNIK ANALIZ VERISI</th>
+                        <th style="padding: 8px; font-size: 9px; width: 25%;">GORSEL</th>
                     </tr>
                 </thead>
                 <tbody>{table_rows_html}</tbody>
@@ -151,26 +156,23 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
 
             {rejected_html}
 
-            <div class="section-title">USTA OZET YORUMU</div>
+            <div class="section-title">AI OZET DEGERLENDIRME</div>
             <div class="comment-box">{ai_comment}</div>
-            <div class="footer">www.carvix.site</div>
+            
+            <div class="footer">Bu rapor yapay zeka tarafindan olusturulmustur. Bilgilendirme amaclıdır. www.carvix.site</div>
         </body>
         </html>
         """
 
         result_file = io.BytesIO()
         pisa_status = pisa.CreatePDF(src=html_template, dest=result_file)
-        if pisa_status.err:
-            print("PDF oluşturulurken hata oluştu:", pisa_status.err)
-            return None
-        return result_file.getvalue()
-
+        return result_file.getvalue() if not pisa_status.err else None
     except Exception as e:
         print(f"PDF Hatasi: {e}")
         return None
 
 # =========================================================
-# MAIL SERVISI
+# MAIL SERVISI (Degisiklik yok, sadece stabilizasyon)
 # =========================================================
 def send_report_email(customer_email: str, flow_token: str, report_content: Any, vehicle_type: str):
     global current_mail_index
@@ -187,7 +189,7 @@ def send_report_email(customer_email: str, flow_token: str, report_content: Any,
         msg['To'] = customer_email
         msg['Subject'] = f"Carvix AI | Ekspertiz Raporunuz Hazir ({report_content.get('plate', 'Analiz')})"
         
-        body = "Aracinizin yapay zeka destekli ekspertiz raporu tamamlanmistir. Detaylar ekteki PDF dosyasindadir."
+        body = "Aracinizin yapay zeka destekli teknik ekspertiz raporu tamamlanmistir. Raporunuz ekte yer almaktadir."
         msg.attach(MIMEText(body, 'plain'))
 
         pdf_data = create_pdf_report(flow_token, report_content, vehicle_type)
@@ -205,7 +207,7 @@ def send_report_email(customer_email: str, flow_token: str, report_content: Any,
         return False
 
 # =========================================================
-# FASTAPI ENDPOINTS
+# FASTAPI ENDPOINTS (Senin kodun, korundu ve iyilestirildi)
 # =========================================================
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -256,14 +258,14 @@ async def shopier_callback(request: Request):
         shopier_data = json.loads(res_decoded)
         s_email = shopier_data.get("email")
         s_platform_id = shopier_data.get("platform_order_id")
-        target_token = None
-        if s_platform_id in flows:
-            target_token = s_platform_id
-        else:
+        
+        target_token = s_platform_id if s_platform_id in flows else None
+        if not target_token:
             for token, f in reversed(list(flows.items())):
                 if f.get("email") == s_email and f.get("status") == "waiting_payment":
                     target_token = token
                     break
+                    
         if target_token:
             job_id = str(uuid.uuid4())
             jobs[job_id] = {"id": job_id, "flow_token": target_token, "status": "queued"}
