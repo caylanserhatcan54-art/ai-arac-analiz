@@ -57,7 +57,7 @@ def _save_json(path: Path, data):
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 # =========================================================
-# PDF ÜRETİCİ (DÜZELTİLDİ)
+# PDF ÜRETİCİ (DÜZELTİLMİŞ)
 # =========================================================
 def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Otomobil"):
     try:
@@ -75,35 +75,36 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
         date_str = time.strftime("%d.%m.%Y %H:%M")
 
         # Parça Analiz Satırları
-table_rows_html = ""
-for p in parts_analysis:
-    p_name = clear_tr(p.get('name','')).replace("ANALIZ", "").replace("_", " ").strip()
-    p_status = clear_tr(p.get('status','')).strip().upper()
-    note = clear_tr(p.get('note', '-'))
-    img_url = p.get('image_url', '')
+        table_rows_html = ""
+        for p in parts_analysis:
+            p_name = clear_tr(p.get('name','')).replace("ANALIZ", "").replace("_", " ").strip()
+            p_status = clear_tr(p.get('status','')).strip().upper()
+            note = clear_tr(p.get('note', '-'))
+            img_url = p.get('image_url', '')
 
-    # Duruma göre renk belirleme
-    if p_status in ["KUSURLU", "BOYALI", "HASARLI", "DEGISEN", "EZIK", "CIZIK"]:
-        status_color = "#ca8a04"  # turuncu
-    elif p_status in ["KRITIK", "MACUN", "ISLEMLI"]:
-        status_color = "#dc2626"  # kırmızı
-    elif p_status in ["ORJINAL", "ORIGINAL"]:
-        status_color = "#16a34a"  # yeşil
-    else:
-        status_color = "#64748b"  # gri - bilinmeyen
-        p_status = "BİLGİ YOK"
+            # Duruma göre renk belirleme
+            if p_status in ["KUSURLU", "BOYALI", "HASARLI", "DEGISEN", "EZIK", "CIZIK"]:
+                status_color = "#ca8a04"  # turuncu
+            elif p_status in ["KRITIK", "MACUN", "ISLEMLI"]:
+                status_color = "#dc2626"  # kırmızı
+            elif p_status in ["ORJINAL", "ORIGINAL"]:
+                status_color = "#16a34a"  # yeşil
+            else:
+                status_color = "#64748b"  # gri - bilinmeyen
+                p_status = "BİLGİ YOK"
 
-    table_rows_html += f"""
-    <tr>
-        <td style="padding: 10px; border-bottom: 1px solid #eee; font-size: 10px; font-weight: bold;">{p_name}</td>
-        <td style="padding: 10px; border-bottom: 1px solid #eee; text-align: center;">
-            <div style="color: white; background-color: {status_color}; padding: 4px; border-radius: 4px; font-size: 8px; font-weight: bold;">{p_status}</div>
-        </td>
-        <td style="padding: 10px; border-bottom: 1px solid #eee; font-size: 9px; color: #444;">{note}</td>
-        <td style="padding: 5px; border-bottom: 1px solid #eee; text-align: center;">
-            <img src="{img_url}" style="width: 100px; height: 60px; border-radius: 4px; border: 1px solid #ddd;">
-        </td>
-    </tr>"""
+            table_rows_html += f"""
+            <tr>
+                <td style="padding: 10px; border-bottom: 1px solid #eee; font-size: 10px; font-weight: bold;">{p_name}</td>
+                <td style="padding: 10px; border-bottom: 1px solid #eee; text-align: center;">
+                    <div style="color: white; background-color: {status_color}; padding: 4px; border-radius: 4px; font-size: 8px; font-weight: bold;">{p_status}</div>
+                </td>
+                <td style="padding: 10px; border-bottom: 1px solid #eee; font-size: 9px; color: #444;">{note}</td>
+                <td style="padding: 5px; border-bottom: 1px solid #eee; text-align: center;">
+                    <img src="{img_url}" style="width: 100px; height: 60px; border-radius: 4px; border: 1px solid #ddd;">
+                </td>
+            </tr>"""
+
         # Reddedilen Görseller Listesi
         rejected_html = ""
         if rejected_images:
@@ -161,9 +162,6 @@ for p in parts_analysis:
         </html>
         """
 
-        # =========================================================
-        # DÜZELTİLMİŞ PDF OLUŞTURMA
-        # =========================================================
         result_file = io.BytesIO()
         pisa_status = pisa.CreatePDF(src=html_template, dest=result_file)
         if pisa_status.err:
@@ -176,7 +174,7 @@ for p in parts_analysis:
         return None
 
 # =========================================================
-# MAIL SERVISI (DOKUNULMADI)
+# MAIL SERVISI
 # =========================================================
 def send_report_email(customer_email: str, flow_token: str, report_content: Any, vehicle_type: str):
     global current_mail_index
@@ -207,10 +205,11 @@ def send_report_email(customer_email: str, flow_token: str, report_content: Any,
             server.send_message(msg)
         return True
     except Exception as e:
-        print(f"Mail Hatasi ({acc['email']}): {e}"); return False
+        print(f"Mail Hatasi ({acc['email']}): {e}")
+        return False
 
 # =========================================================
-# FASTAPI ENDPOINTS (GELİŞTİRİLDİ)
+# FASTAPI ENDPOINTS
 # =========================================================
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -278,7 +277,8 @@ async def shopier_callback(request: Request):
             return Response(content="success", status_code=200)
         return Response(content="fail", status_code=400)
     except Exception as e:
-        print(f"Callback Hatasi: {e}"); return Response(content="error", status_code=500)
+        print(f"Callback Hatasi: {e}")
+        return Response(content="error", status_code=500)
 
 @app.get("/jobs/next")
 def get_next_job():
