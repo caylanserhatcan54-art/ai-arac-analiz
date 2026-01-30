@@ -6,13 +6,32 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
-from xhtml2pdf import pisa 
+from xhtml2pdf import pisa
 
-load_dotenv()
+# =========================================================
+# 0. TORCH & ULTRALYTICS UYARLAMASI (Vast.ai / Container)
+# =========================================================
+import torch
+try:
+    import ultralytics
+    import ultralytics.engine.model as model_module
+    import ultralytics.engine.results as results_module
+    import sys
+    sys.modules['ultralytics.yolo'] = ultralytics
+    sys.modules['ultralytics.yolo.engine'] = ultralytics.engine
+    sys.modules['ultralytics.yolo.engine.model'] = model_module
+    sys.modules['ultralytics.yolo.engine.results'] = results_module
+except Exception as e:
+    print(f">>> Yama Uyarisi (Ultralytics): {e}")
+
+torch.load = lambda *args, **kwargs: torch.serialization.load(
+    *args, **{**kwargs, 'weights_only': False}
+) if 'weights_only' not in kwargs else torch.serialization.load(*args, **kwargs)
 
 # =========================================================
 # AYARLAR VE ARAÇ ŞEMALARI
 # =========================================================
+load_dotenv()
 BASE_URL = os.getenv("BASE_URL", "https://ai-arac-analiz-backend.onrender.com").rstrip("/")
 
 MAIL_POOL = [
@@ -74,7 +93,6 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
         report_id = f"#{flow_token[:8].upper()}"
         date_str = time.strftime("%d.%m.%Y %H:%M")
 
-        # Parça Analiz Satırları
         table_rows_html = ""
         for p in parts_analysis:
             p_name = clear_tr(p.get('name','')).replace("ANALIZ", "").replace("_", " ").strip()
@@ -82,15 +100,14 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
             note = clear_tr(p.get('note', '-'))
             img_url = p.get('image_url', '')
 
-            # Duruma göre renk belirleme
             if p_status in ["KUSURLU", "BOYALI", "HASARLI", "DEGISEN", "EZIK", "CIZIK"]:
-                status_color = "#ca8a04"  # turuncu
+                status_color = "#ca8a04"
             elif p_status in ["KRITIK", "MACUN", "ISLEMLI"]:
-                status_color = "#dc2626"  # kırmızı
+                status_color = "#dc2626"
             elif p_status in ["ORJINAL", "ORIGINAL"]:
-                status_color = "#16a34a"  # yeşil
+                status_color = "#16a34a"
             else:
-                status_color = "#64748b"  # gri - bilinmeyen
+                status_color = "#64748b"
                 p_status = "BİLGİ YOK"
 
             table_rows_html += f"""
@@ -105,7 +122,6 @@ def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Ot
                 </td>
             </tr>"""
 
-        # Reddedilen Görseller Listesi
         rejected_html = ""
         if rejected_images:
             rejected_html = '<div class="section-title" style="background:#fff1f2; color:#be123c; border-left-color:#be123c;"> ANALIZE UYGUN GORULMEYEN GORSELLER</div><ul>'
