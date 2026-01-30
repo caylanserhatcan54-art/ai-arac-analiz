@@ -9,26 +9,6 @@ from dotenv import load_dotenv
 from xhtml2pdf import pisa
 
 # =========================================================
-# 0. TORCH & ULTRALYTICS UYARLAMASI (Vast.ai / Container)
-# =========================================================
-import torch
-try:
-    import ultralytics
-    import ultralytics.engine.model as model_module
-    import ultralytics.engine.results as results_module
-    import sys
-    sys.modules['ultralytics.yolo'] = ultralytics
-    sys.modules['ultralytics.yolo.engine'] = ultralytics.engine
-    sys.modules['ultralytics.yolo.engine.model'] = model_module
-    sys.modules['ultralytics.yolo.engine.results'] = results_module
-except Exception as e:
-    print(f">>> Yama Uyarisi (Ultralytics): {e}")
-
-torch.load = lambda *args, **kwargs: torch.serialization.load(
-    *args, **{**kwargs, 'weights_only': False}
-) if 'weights_only' not in kwargs else torch.serialization.load(*args, **kwargs)
-
-# =========================================================
 # AYARLAR VE ARAÇ ŞEMALARI
 # =========================================================
 load_dotenv()
@@ -76,7 +56,7 @@ def _save_json(path: Path, data):
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 # =========================================================
-# PDF ÜRETİCİ (DÜZELTİLMİŞ)
+# PDF ÜRETİCİ
 # =========================================================
 def create_pdf_report(flow_token: str, report_data: Any, vehicle_type: str = "Otomobil"):
     try:
